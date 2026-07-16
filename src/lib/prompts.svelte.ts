@@ -327,6 +327,26 @@ export function composeInsertSnippet(content: string): void {
   prompts.renderNonce++;
 }
 
+/**
+ * Empty the compose surface in one gesture (the box's Clear button). Resets the
+ * doc AND everything that derives from it: the caret, the live-match query, the
+ * pending post-insert caret, and the variable fills — a Clear that left old fills
+ * behind would silently repopulate them the moment the user retyped a name that
+ * happened to match, which reads as a bug, not a fresh start. Bumps `renderNonce`
+ * so the box repaints empty (an internal reset, not a keystroke), and reschedules
+ * the match so the panel falls back to the whole library at rest.
+ */
+export function composeClear(): void {
+  prompts.doc = emptyDoc();
+  prompts.caret = null;
+  prompts.caretText = '';
+  prompts.matchQuery = '';
+  prompts.pendingCaret = null;
+  prompts.fills = {};
+  prompts.renderNonce++;
+  scheduleMatch();
+}
+
 /** One fill input changed. Variables are global by name, so this one value serves
  *  every occurrence — in the fill list under the box and in the Save-as-snippet
  *  popup. */

@@ -309,6 +309,18 @@ console.log('contenteditable round-trip');
   eq([kinds(emptied), flatten(emptied)], [['text'], 'keep'], 'an emptied tint run is dropped');
 }
 
+// ── Clear resets to the empty document ───────────────────────────────────────
+// The box's Clear button resets the store doc to emptyDoc() (composeClear). The
+// store itself is Svelte-runes and can't be imported here, so this pins the pure
+// target of that reset: an empty doc carries no text, no variables, and copies
+// out empty — i.e. Clear genuinely empties everything the box contributes.
+console.log('clear → empty document');
+{
+  eq(flatten(emptyDoc()), '', 'a cleared doc flattens to nothing');
+  eq(names(flatten(emptyDoc())), [], 'a cleared doc has no variables to fill');
+  eq(copyText(flatten(emptyDoc()), { stale: 'x' }), '', 'a cleared doc copies out empty, ignoring stale fills');
+}
+
 // ── caretQuery ───────────────────────────────────────────────────────────────
 console.log('caretQuery');
 {

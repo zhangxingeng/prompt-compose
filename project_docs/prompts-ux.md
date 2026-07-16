@@ -38,8 +38,9 @@ you add an affordance, that is the test it has to pass.
 Top to bottom: the **project tab row** (one tab per folder, plus a `⋯` manager), then two columns —
 the **library panel** on the left (collapsible with `⟨`; a `⟩ Library` peek button brings it back)
 and the **compose box** on the right. The library panel's `+` button creates a snippet. Under the
-box, the **variable fill list** appears whenever the composed prompt contains variables. One
-situational button sits inside the box, only when it has content: `Copy prompt` (top-right).
+box, the **variable fill list** appears whenever the composed prompt contains variables. Two
+situational buttons sit inside the box, only when it has content (top-right): `Clear prompt`, which
+empties the box in one click — no confirm — and `Copy prompt`.
 
 **There is no Global tab, and its absence is the point.** A snippet lives in the folder it sits in,
 so a scope belonging to no folder cannot exist. There is also no settings gear, no project colors, no
