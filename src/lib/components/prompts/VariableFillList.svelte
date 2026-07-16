@@ -1,32 +1,28 @@
 <script lang="ts">
   /**
-   * The variable fill list: one row per distinct variable in the WHOLE composed
-   * prompt — typed text and every chip's body — in first-appearance order. Lives
-   * in its own column on the right of the screen (round 2), out from under the
-   * compose box so the box can be as wide as possible.
+   * The variable fill list: one row per distinct variable across the WHOLE
+   * composed prompt, in first-appearance order. Lives in its own column on the
+   * right of the screen, out from under the compose box so the box can be as wide
+   * as possible.
    *
    * Variables are global by name. (The model cannot tell two identically-named
    * variables apart, so pretending they differ would be a fiction the UI maintains
-   * and the output discards.) One name is one cell, and that cell appears in two
-   * places: here, and in the popup of any chip whose body uses it. Editing either
-   * updates the same value, and the other reflects it immediately.
+   * and the output discards.) One name is one cell, and it appears in two places:
+   * here, and in the Save-as-snippet popup when the body being saved uses it.
+   * Editing either updates the same value, and the other reflects it immediately —
+   * a variable's value is a single global cell; showing one cell in two views is
+   * convenience, not ambiguity.
    *
-   * That is NOT the two-places-to-edit confusion this round exists to kill. That one
-   * was about snippet BODIES, where two surfaces meant two divergent sources of
-   * truth. A variable's value is a single global cell; showing one cell in two views
-   * is convenience, not ambiguity.
-   *
-   * Round 1 gave each row its own as-variable toggle. Round 2 cut it: every
-   * variable is now always hoisted into the appended `<prompt_vars>` block on
-   * copy (see `compose/variables.ts`) — a toggle nobody flipped is the archetype
-   * of the forgotten feature this whole effort exists to delete.
+   * Every variable is always hoisted into the appended `<prompt_vars>` block on
+   * copy (see `compose/variables.ts`) — the round-1 per-variable as-variable toggle
+   * was cut, a control nobody flipped.
    */
   import { prompts, setFill } from '$lib/prompts.svelte';
   import { flatten } from '$lib/compose/doc';
   import { parseVariables, UNSET_VALUE } from '$lib/compose/variables';
 
-  // flatten(), not the rendered text: a chip shows its NAME in the box but
-  // contributes its BODY to the prompt, so its variables must surface here.
+  // The variables are parsed out of the flattened prompt — the plain text of the
+  // whole composition, tinted runs and free text alike.
   const variables = $derived(parseVariables(flatten(prompts.doc)));
 </script>
 

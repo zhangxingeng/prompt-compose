@@ -21,19 +21,12 @@ const root = join(__dir, '..');
 const {
   emptyDoc,
   docFromText,
-  newCid,
   normalize,
   flatten,
-  chipAt,
-  chipVariables,
-  insertChip,
-  replaceChipContent,
-  retargetChip,
-  dissolveChip,
-  toRenderNodes,
+  caretAtGlobalOffset,
+  insertSnippet,
   fromRawNodes,
   caretQuery,
-  ZWSP,
 } = await import(join(root, 'src/lib/compose/doc.ts'));
 const { parseVariables, copyText, UNSET_VALUE } = await import(
   join(root, 'src/lib/compose/variables.ts')
@@ -54,7 +47,8 @@ function eq(actual, expected, msg) {
 
 const names = (text) => parseVariables(text).map((v) => v.name);
 const kinds = (doc) => doc.nodes.map((n) => n.kind);
-const chip = (name, content, cid = newCid()) => ({ cid, name, content });
+const text = (t) => ({ kind: 'text', text: t });
+const tint = (t) => ({ kind: 'tint', text: t });
 
 // ── the grammar: `{name}` and nothing else ───────────────────────────────────
 console.log('variable grammar');
@@ -214,211 +208,105 @@ console.log('copy output');
 // ── the node model ───────────────────────────────────────────────────────────
 console.log('node model');
 {
-  // flatten() is the seam where rendered and contributed diverge: the box shows
-  // a chip's NAME, and flatten returns its BODY.
+  // A tinted run is ordinary text — rendered == contributed. flatten emits every
+  // node's text, and the variable grammar reads that flattened text uniformly,
+  // tinted runs and free text alike.
   const d = normalize({
-    nodes: [
-      { kind: 'text', text: 'intro ' },
-      { kind: 'chip', ...chip('rust/review', 'Review {lang} code.') },
-      { kind: 'text', text: ' outro' },
-    ],
+    nodes: [text('intro '), tint('Review {lang} code.'), text(' outro')],
   });
-  eq(flatten(d), 'intro Review {lang} code. outro', 'flatten emits chip CONTENT, not its name');
-  eq(
-    toRenderNodes(d)[1],
-    { kind: 'chip', cid: d.nodes[1].cid, name: 'rust/review', vars: ['lang'], dirty: false },
-    'a chip renders as its name + variable names — never its body — plus a clean dirty flag'
-  );
-  eq(names(flatten(d)), ['lang'], "a chip's variables reach the whole-prompt fill list");
+  eq(flatten(d), 'intro Review {lang} code. outro', 'flatten emits every run, in order');
+  eq(names(flatten(d)), ['lang'], "a tinted run's variables reach the whole-prompt fill list");
 
-  // normalize: no empty text nodes, no adjacent text nodes.
+  // normalize: drop empties, merge adjacent SAME-kind runs, keep kind boundaries.
   const messy = normalize({
-    nodes: [
-      { kind: 'text', text: '' },
-      { kind: 'text', text: 'a' },
-      { kind: 'text', text: 'b' },
-      { kind: 'chip', ...chip('s', 'S') },
-    ],
+    nodes: [text(''), text('a'), text('b'), tint('S'), tint('T'), text(''), text('u')],
   });
-  eq(kinds(messy), ['text', 'chip'], 'normalize drops empties and merges adjacent text');
-  eq(messy.nodes[0].text, 'ab', 'normalize merged the text');
+  eq(kinds(messy), ['text', 'tint', 'text'], 'drops empties, merges same-kind, keeps kind boundaries');
+  eq(flatten(messy), 'abSTu', 'adjacent text merged, adjacent tint merged');
 
-  // insertChip replaces the query line the user typed to summon the snippet.
-  let q = docFromText('intro\nsenior review');
-  q = insertChip(q, { node: 0, offset: 'intro\nsenior review'.length }, chip('rev', 'BODY'));
-  eq(kinds(q), ['text', 'chip'], 'the query line is consumed by the insert');
-  eq(flatten(q), 'intro\nBODY', 'query text is replaced, not left in front of the chip');
+  // insertSnippet replaces the query line the user typed to summon the snippet,
+  // and returns the caret just past the inserted text.
+  const q = insertSnippet(docFromText('intro\nsenior review'), { node: 0, offset: 'intro\nsenior review'.length }, 'BODY');
+  eq(kinds(q.doc), ['text', 'tint'], 'the query line is consumed; the snippet lands tinted');
+  eq(flatten(q.doc), 'intro\nBODY', 'query text replaced, not left in front of the run');
+  eq(q.caret, { node: 1, offset: 4 }, 'caret lands at the end of the inserted tint (nothing after it)');
 
-  // Insert into an empty doc.
-  const e = insertChip(emptyDoc(), { node: 0, offset: 0 }, chip('s', 'S'));
-  eq(kinds(e), ['chip'], 'insert into an empty doc appends the chip');
+  // A leading line before the query is kept; the query line becomes the tint.
+  const withPrefix = insertSnippet(docFromText('line1\nquery'), { node: 0, offset: 'line1\nquery'.length }, 'B');
+  eq(flatten(withPrefix.doc), 'line1\nB', 'the prefix line survives, only the query line is replaced');
 
-  // A caret can genuinely sit BETWEEN two adjacent chips, where the model holds
-  // no text node to split. The chip must land there, not at the end of the doc.
-  const between = insertChip(
-    normalize({
-      nodes: [
-        { kind: 'chip', ...chip('one', 'A') },
-        { kind: 'chip', ...chip('two', 'C') },
-      ],
-    }),
-    { node: 1, offset: 0 },
-    chip('mid', 'B')
-  );
-  eq(flatten(between), 'ABC', 'a chip inserted between two chips lands between them');
+  // Inserting INSIDE a tinted run: the split halves stay tinted and merge with the
+  // insert into one tinted run — no library link, so no instance to keep apart.
+  const inTint = insertSnippet(normalize({ nodes: [tint('keep\nquery')] }), { node: 0, offset: 'keep\nquery'.length }, 'NEW');
+  eq(kinds(inTint.doc), ['tint'], 'splitting a tint leaves both halves tinted, merged with the insert');
+  eq(flatten(inTint.doc), 'keep\nNEW', 'the tinted prefix stays, the query line is replaced');
 
-  // Past the end → appended.
-  const past = insertChip(docFromText('tail'), { node: 9, offset: 0 }, chip('s', '!'));
-  eq(flatten(past), 'tail!', 'a caret past the end appends');
+  // Insert into an empty doc, and past the end.
+  const e = insertSnippet(emptyDoc(), { node: 0, offset: 0 }, 'S');
+  eq(kinds(e.doc), ['tint'], 'insert into an empty doc lands a tinted run');
+  eq(flatten(e.doc), 'S', 'body inserted');
+  const past = insertSnippet(docFromText('tail'), { node: 9, offset: 0 }, '!');
+  eq([kinds(past.doc), flatten(past.doc)], [['text', 'tint'], 'tail!'], 'a caret past the end appends a tinted run');
 
-  // The popup's session-only Save (round 1's "Use once") / Update / Delete.
-  const cid = newCid();
-  let u = normalize({ nodes: [{ kind: 'chip', ...chip('a', 'ORIG', cid) }] });
-  eq(chipAt(u, cid).dirty, undefined, 'a freshly inserted chip starts clean');
-  u = replaceChipContent(u, cid, 'TWEAKED');
-  eq(flatten(u), 'TWEAKED', 'session-only Save rewrites this chip only');
-  eq(chipAt(u, cid).name, 'a', 'session-only Save leaves the name alone');
-  eq(chipAt(u, cid).dirty, true, 'session-only Save marks the chip dirty (diverged from its file)');
+  // caretAtGlobalOffset maps a flat character offset to {node, offset}, preferring
+  // the next node's start at an exact boundary (so the post-insert caret lands in
+  // trailing free text, not on the tint's edge).
+  const cad = normalize({ nodes: [text('ab'), tint('cd'), text('ef')] });
+  eq(caretAtGlobalOffset(cad, 0), { node: 0, offset: 0 }, 'start of doc');
+  eq(caretAtGlobalOffset(cad, 2), { node: 1, offset: 0 }, 'a boundary prefers the next node start');
+  eq(caretAtGlobalOffset(cad, 3), { node: 1, offset: 1 }, 'inside the tint');
+  eq(caretAtGlobalOffset(cad, 99), { node: 2, offset: 2 }, 'past the end clamps to the last node end');
 
-  let r = retargetChip(u, cid, 'b', 'NEW');
-  eq([chipAt(r, cid).name, flatten(r)], ['b', 'NEW'], 'Update-under-a-new-name retargets the chip');
-  eq(chipAt(r, cid).dirty, false, 'Update writes the file, so it clears dirty');
-
-  // Delete dissolves the chip into typed text: the file goes, the writing stays.
-  const del = dissolveChip(
-    normalize({ nodes: [{ kind: 'text', text: 'x ' }, { kind: 'chip', ...chip('a', 'BODY', cid) }] }),
-    cid
-  );
-  eq(kinds(del), ['text'], 'Delete leaves no chip behind');
-  eq(flatten(del), 'x BODY', "Delete keeps the chip's words in the prompt");
-
-  // Session-only Save on one instance must not touch the other copy of the same
-  // snippet.
-  const c1 = newCid();
-  const c2 = newCid();
-  let two = normalize({
-    nodes: [
-      { kind: 'chip', ...chip('same', 'BODY', c1) },
-      { kind: 'text', text: ' / ' },
-      { kind: 'chip', ...chip('same', 'BODY', c2) },
-    ],
-  });
-  two = replaceChipContent(two, c1, 'ONLY-ME');
-  eq(flatten(two), 'ONLY-ME / BODY', 'session-only Save is per-instance, not per-snippet');
-
-  // chipVariables reads the body, deduped and in order.
-  eq(chipVariables({ kind: 'chip', ...chip('s', '{b} {a} {b}') }), ['b', 'a'], 'chip variables');
-
-  // Pure transforms: inputs are never mutated.
-  const before = normalize({ nodes: [{ kind: 'chip', ...chip('a', 'X', cid) }] });
+  // Pure transform: the input is never mutated.
+  const before = normalize({ nodes: [text('a'), tint('b')] });
   const snap = JSON.stringify(before);
-  replaceChipContent(before, cid, 'Y');
-  dissolveChip(before, cid);
-  eq(JSON.stringify(before), snap, 'transforms do not mutate their input');
+  insertSnippet(before, { node: 0, offset: 1 }, 'X');
+  eq(JSON.stringify(before), snap, 'insertSnippet does not mutate its input');
 }
 
 // ── the contenteditable round-trip ───────────────────────────────────────────
-// doc → toRenderNodes → (DOM) → fromRawNodes → doc must be the IDENTITY. If it
-// is not, a prompt silently corrupts into something that still looks plausible in
-// the box and copies out wrong — the failure mode a code read rationalizes past.
+// doc → (render) → DOM → readRawNodes → fromRawNodes → doc must be the IDENTITY.
+// If it is not, a prompt silently corrupts into something that still looks
+// plausible in the box and copies out wrong — the failure mode a code read
+// rationalizes past.
 console.log('contenteditable round-trip');
 {
-  /** Simulate the DOM: render, then read the children straight back. A chip
-   *  element yields its cid; text yields its characters. The renderer pads chips
-   *  with a ZWSP so the browser always has a caret position. */
-  const throughDom = (doc) => {
-    const raw = [];
-    const rendered = toRenderNodes(doc);
-    rendered.forEach((n, i) => {
-      if (n.kind === 'text') {
-        raw.push({ cid: null, text: n.text });
-        return;
-      }
-      // The renderer's ZWSP padding around a chip — must never survive read-back.
-      if (i === 0 || rendered[i - 1].kind === 'chip') raw.push({ cid: null, text: ZWSP });
-      raw.push({ cid: n.cid, text: `${n.name}` });
-      if (i === rendered.length - 1 || rendered[i + 1].kind === 'chip') {
-        raw.push({ cid: null, text: ZWSP });
-      }
-    });
-    return fromRawNodes(raw, doc);
-  };
+  /** Simulate the DOM: one raw run per model node — a `tint` node reads back as a
+   *  `.tint` span (tint: true), a `text` node as a bare text node (tint: false). */
+  const throughDom = (doc) =>
+    fromRawNodes(doc.nodes.map((n) => ({ tint: n.kind === 'tint', text: n.text })));
 
   const roundTrips = (doc, msg) => eq(throughDom(doc).nodes, doc.nodes, `round-trip: ${msg}`);
-
-  const a = newCid();
-  const b = newCid();
 
   roundTrips(emptyDoc(), 'empty doc');
   roundTrips(docFromText('just text'), 'text only');
   roundTrips(docFromText('trailing newline\n'), 'trailing newline survives');
-  roundTrips(normalize({ nodes: [{ kind: 'chip', ...chip('only', 'BODY', a) }] }), 'a chip alone');
-  roundTrips(
-    normalize({ nodes: [{ kind: 'chip', ...chip('first', 'B', a) }, { kind: 'text', text: ' tail' }] }),
-    'chip at position 0'
-  );
-  roundTrips(
-    normalize({ nodes: [{ kind: 'text', text: 'head ' }, { kind: 'chip', ...chip('last', 'B', a) }] }),
-    'chip at the very end'
-  );
+  roundTrips(normalize({ nodes: [tint('BODY')] }), 'a tinted run alone');
+  roundTrips(normalize({ nodes: [tint('B'), text(' tail')] }), 'tint at position 0');
+  roundTrips(normalize({ nodes: [text('head '), tint('B')] }), 'tint at the very end');
+  roundTrips(normalize({ nodes: [text('a '), tint('mid'), text(' z')] }), 'text, tint, text');
   roundTrips(
     normalize({
-      nodes: [
-        { kind: 'chip', ...chip('one', 'B1', a) },
-        { kind: 'chip', ...chip('two', 'B2', b) },
-      ],
+      nodes: [text('a\n\nb '), tint('Review {lang}\n\n```\nlet x = {size};\n```'), text(' z')],
     }),
-    'two ADJACENT chips, no text between'
-  );
-  roundTrips(normalize({ nodes: [{ kind: 'chip', ...chip('empty', '', a) }] }), 'a chip with EMPTY content');
-  roundTrips(
-    normalize({
-      nodes: [
-        { kind: 'text', text: 'a\n\nb ' },
-        { kind: 'chip', ...chip('mid', 'Review {lang}\n\n```\nlet x = {size};\n```', a) },
-        { kind: 'text', text: ' z' },
-      ],
-    }),
-    'a chip whose body carries newlines and a fenced block'
+    'a tinted body carrying newlines and a fenced block'
   );
 
-  // The ZWSP is display scaffolding — it must never reach the model, and so can
-  // never reach a copied prompt.
-  const padded = fromRawNodes([{ cid: null, text: `${ZWSP}hi${ZWSP}` }], emptyDoc());
-  eq(flatten(padded), 'hi', 'ZWSP padding is stripped on the way back in');
+  // The browser can split one tint span into two adjacent .tint spans (both keep
+  // the class); read back, they merge into one tinted run — provenance and text
+  // both preserved.
+  const split = fromRawNodes([{ tint: true, text: 'AA' }, { tint: true, text: 'BB' }]);
+  eq([kinds(split), flatten(split)], [['tint'], 'AABB'], 'two adjacent tint runs read back as one');
 
-  // A chip copy/pasted inside the box arrives with a DUPLICATE cid. It must
-  // become its own instance — otherwise `Use once` on one would silently rewrite
-  // the other, which is the corruption class this redesign exists to kill,
-  // arriving through the clipboard.
-  const src = normalize({ nodes: [{ kind: 'chip', ...chip('dup', 'BODY', a) }] });
-  const pasted = fromRawNodes(
-    [
-      { cid: a, text: 'dup' },
-      { cid: a, text: 'dup' },
-    ],
-    src
-  );
-  eq(kinds(pasted), ['chip', 'chip'], 'a pasted chip survives as a second chip');
-  assert(pasted.nodes[0].cid !== pasted.nodes[1].cid, 'a pasted chip gets a FRESH cid');
-  eq(
-    [pasted.nodes[0].content, pasted.nodes[1].content],
-    ['BODY', 'BODY'],
-    'both copies keep the body — a copy is a copy'
-  );
-  const tweaked = replaceChipContent(pasted, pasted.nodes[0].cid, 'ONLY-ME');
-  eq(flatten(tweaked), 'ONLY-MEBODY', 'Use once on the pasted pair touches one instance only');
+  // Typing right after a tinted run starts a fresh untinted text node (the caret
+  // is placed at box level after the span), so the new words are NOT tinted.
+  const afterTint = fromRawNodes([{ tint: true, text: 'X' }, { tint: false, text: 'y' }]);
+  eq([kinds(afterTint), flatten(afterTint)], [['tint', 'text'], 'Xy'], 'text typed after a tint reads back as free text');
 
-  // Deleting a chip in the box (backspace over the atom) just drops it.
-  const dropped = fromRawNodes([{ cid: null, text: 'kept' }], src);
-  eq(kinds(dropped), ['text'], 'a backspaced chip is gone from the model');
-
-  // A chip element from outside the box has an unknown cid: dropped, never
-  // coerced into text — rendering its label would substitute the word
-  // "code_review" for the code-review prompt itself.
-  const foreign = fromRawNodes([{ cid: 'not-ours', text: 'code_review' }, { cid: null, text: 'x' }], src);
-  eq(kinds(foreign), ['text'], 'an unknown chip is dropped');
-  eq(flatten(foreign), 'x', "an unknown chip's LABEL never leaks into the prompt");
+  // A tinted run edited down to nothing simply vanishes (normalize drops empties);
+  // the surrounding text is untouched — text is never lost, only the tint flag.
+  const emptied = fromRawNodes([{ tint: false, text: 'keep' }, { tint: true, text: '' }]);
+  eq([kinds(emptied), flatten(emptied)], [['text'], 'keep'], 'an emptied tint run is dropped');
 }
 
 // ── caretQuery ───────────────────────────────────────────────────────────────
