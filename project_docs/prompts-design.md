@@ -120,11 +120,11 @@ The grammar, whole:
    `{my var}`, `{a.b}`, `{:x}`, `{"json": 1}`, `{ return x }`, and `{task:write tests}` (the removed
    default form) all simply fail rule 1's name test. This is not a list of exceptions — it is rule 1
    seen from the other side.
-4. One name is one variable, document-wide, first-appearance order. Two chips containing `{language}`
+4. One name is one variable, document-wide, first-appearance order. Two occurrences of `{language}`
    share one value: the model cannot tell two identically-named variables apart, so pretending they
    differ would be a fiction the UI maintains and the output discards.
 5. An unfilled variable resolves to the literal sentinel `variable not set, ask user for it`
-   (`UNSET_VALUE`), in **both** copy modes. A forgotten variable therefore still produces a working
+   (`UNSET_VALUE`) on copy. A forgotten variable therefore still produces a working
    prompt — the model asks, rather than silently receiving a blank or a stray `{placeholder}`. This
    is what replaced per-variable defaults: every variable is a string (an LLM only consumes strings,
    so a type system here was ceremony) and every variable has the same implicit default, so both the
@@ -145,8 +145,8 @@ first realistic dev-prompt fixture anyone wrote put its placeholder in backticks
 (`` `{command_name}` ``), which the carve-out silently turned into literal text.
 
 **The accepted cost, stated plainly.** A fenced code sample containing `{name}` does become a
-variable — and that is **loud, not silent**: the chip renders the variable names it contains and the
-fill list lists them, so a stray `name` appears in the UI and the author escapes it `{{name}}`,
+variable — and that is **loud, not silent**: the fill list surfaces every variable it finds in the
+composed prompt, so a stray `name` appears in the UI and the author escapes it `{{name}}`,
 exactly as they would in Python. *The UI surfacing every parsed variable is what makes this safe*,
 and it is the load-bearing half of the trade.
 
@@ -199,60 +199,58 @@ An empty fill input reads as untouched and resolves to `UNSET_VALUE` exactly as 
 There is deliberately no way to fill a variable with the empty string: to say nothing, delete the
 `{name}`.
 
-## The compose model — why chips are atoms
+## The compose model — inserted snippets are tinted text
 
-`src/lib/compose/doc.ts`. A Doc is a **flat list of nodes**, each either free-typed `text` or a
-`chip` (an inserted snippet). Pure data and pure transforms — no DOM, no Svelte.
+`src/lib/compose/doc.ts`. A Doc is a **flat list of nodes**, each either free-typed `text` or `tint`
+— the body of an inserted snippet, marked to signal template provenance. Both carry ordinary
+**editable** text; they differ only in how the box paints them. Pure data and pure transforms — no
+DOM, no Svelte.
 
-**This replaced a span-tiling model, and the reason is the load-bearing wisdom of the whole redesign.**
-The earlier Doc was one `text` string plus `spans[]` annotating ranges of it, under the invariant
-`sum(span.length) === text.length` — spans *tile* the text. That invariant is precisely what had to
-die. A chip **renders** as its name and its variables but **contributes** its whole body to the
-copied prompt: rendered ≠ contributed. The tiling invariant asserts they are equal. So no guard
-could have grown a chip on top of it — a `<textarea>` can only render the characters it contains,
-which is exactly why a snippet's body used to sit in the box as editable text, and exactly why
-editing it in place was possible *at all*. Inline editing was not a missing check; it was what the
-model made inevitable.
+**This model has been through two rewrites, and the arc is the load-bearing wisdom.** The first Doc
+was one `text` string plus `spans[]` tiling it (`sum(span.length) === text.length`). A snippet's
+body sat in the box as editable text, and editing it in place silently diverged the composed text
+from the stored file, flipping the span into a `linked-modified` provenance that persisted nothing.
+Phase 2 killed that by making a snippet a **chip** — a `contenteditable="false"` atom that rendered
+as its name+variables but contributed its whole body: rendered ≠ contributed, so inline editing was
+structurally impossible. But a chip still carried a link back to its library file, which is the seam
+the divergence bug lived on.
 
-That inline edit was the defect: it silently diverged the composed text from the stored snippet and
-flipped the span into a third provenance state, `linked-modified`, which persisted nothing — two
-places to edit one thing, with different consequences and no signal about which was which. A chip
-that cannot be edited in place cannot be modified in place, so `linked-modified` is gone with the
-model that produced it, along with the entire clip-and-demote algebra it needed (the applyEdit
-transition table, linkRange, replaceSpan, spanStarts, diffTexts).
+Phase 3 deletes the seam at the root instead of guarding it. An inserted snippet is now its **whole
+body text**, dropped into the box as ordinary editable text and tinted. **There is no link back to
+the library file.** Once inserted, the text is just text with a tint; editing it touches nothing on
+disk, so the divergence class cannot return — not because editing is blocked (it isn't), but because
+there is nothing left to diverge *from*. The library is written only through the explicit
+Save-as-snippet action, never as a side effect of editing composed text.
 
-A chip is therefore an **atom**. The mechanism is `contenteditable="false"` on the chip element, so
-the rule holds *structurally* rather than by guarding: the browser itself refuses to put a caret
-inside a chip, treats it as one unit for arrow keys and selection, and deletes it whole on Backspace.
-There is no inline edit to intercept because there is no inline edit.
+Rendered == contributed again, so the entire chip apparatus is gone: no `cid` instance identity, no
+body-carried-on-the-node, no ZWSP caret scaffolding, no popup edit surface, no `dirty` state, and no
+clip-and-demote algebra (the `linked-modified` state, applyEdit transition table, linkRange,
+replaceSpan, spanStarts, diffTexts all deleted). A `tint` node is a `text` node wearing a highlight.
 
 Consequences worth knowing before you touch this file:
 
-- **A chip carries its body** (`content`), rather than reading through to the library by name. This
-  is what makes `Use once` possible at all — a chip may legitimately differ from the file of the same
-  name because the user tweaked it for one prompt. It also makes a draft durable: the library
-  changing, or the snippet being deleted outright, cannot reach in and gut a prompt someone is
-  halfway through writing.
-- **`cid` identifies the chip instance, not the snippet.** The same snippet can be inserted twice,
-  and `Use once` on one copy must not touch the other. `normalize` re-issues a duplicate `cid`,
-  which is how a copy/pasted chip becomes its own instance rather than a shared one — without it,
-  editing one would silently rewrite the other, the exact class of bug this redesign exists to kill,
-  arriving through the clipboard.
+- **A `tint` node carries no identity and no link** — the tint is a pure visual flag. Two snippets
+  inserted back to back merge into one tinted run (`normalize`), which is fine precisely because
+  there is no instance to keep apart. Editing a tinted run, in any way, writes nothing to the
+  library.
 - **The DOM is read back wholesale** (`fromRawNodes`), not patched edit-by-edit. Typing, paste, cut,
   drag, undo and IME composition all arrive as "the box now contains this", so there is no
-  per-inputType transition table to get wrong. The round-trip `doc → toRenderNodes → (DOM) →
+  per-inputType transition table to get wrong. The round-trip `doc → (render) → DOM → readRawNodes →
   fromRawNodes → doc` must be the identity; if it is not, a prompt silently corrupts into something
-  that still *looks* plausible in the box and copies out wrong.
-- **A chip whose `cid` is unknown is dropped, not coerced into text.** Its body lives only in the
-  model, so there is nothing faithful to put in its place — rendering its label instead would
-  substitute the words "code_review" for the code-review prompt itself.
-- **ZWSP is display scaffolding**, padding around chips so the browser always has somewhere to put a
-  caret (a chip at the very start or end, or two adjacent chips, otherwise leave nowhere to click).
-  It is stripped on the way back in, so it can never reach a copied prompt.
-- `flatten(doc)` is the seam where rendered and contributed diverge: it returns typed text plus each
-  chip's **body**. Everything downstream — the fill list, Copy Prompt — reads it, never the rendered
-  form. A selection that includes a chip resolves the same way (`ComposeBox.selectionText`), or
-  saving a selection would store the literal words "rust/code_review" instead of the prompt.
+  that still *looks* plausible in the box and copies out wrong. The invariant that matters is that
+  **text is never lost** — a mis-tinted run is a cosmetic drift, a lost run is data loss.
+- **Tint follows the text through edits for free**, via whether the browser kept a run inside a
+  `.tint` span. To keep a snippet's tint from bleeding onto the words typed after it, the post-insert
+  caret is dropped at box level *after* the tint span (not at its trailing edge), so a continuation
+  keystroke starts a fresh untinted text node.
+- `flatten(doc)` returns every node's text in order — typed text and tinted text alike. Everything
+  downstream (the variable fill list, Copy Prompt) reads it, and the variable grammar parses `{name}`
+  out of that flattened text uniformly. There is no rendered≠contributed seam to reconcile any more,
+  so a plain selection copy from the box is already correct.
+- **Editing or deleting an existing snippet is not an in-app action.** A snippet is a `.md` file
+  whose filename is its name, so that is done in `$EDITOR` or the file manager; the app keeps only
+  *create* (the library's `+` → Save-as-snippet) and *insert*. This is a deliberate consequence of
+  deleting the chip popup — flagged for the founder's feel-check, not an oversight.
 
 ## Rust ↔ JS command contract
 
@@ -334,6 +332,21 @@ semantic-only candidates, without which low-similarity vectors pad the panel wit
 The one hard constraint is enforced **structurally**: a hit flagged `exact` (a full-query name match)
 sorts above every non-exact hit no matter what either engine scored, so an exact name match can never
 be buried.
+
+**The panel relevance floor** (`MATCH_MIN_SCORE`, 0.2) drops any hit whose fused score falls under it
+— applied on the **non-empty-query path only** (the at-rest listing is scored 0.0 and must never be
+filtered, or the whole library would vanish). Without it a query just reordered the entire library,
+low-relevance hits included; the founder's complaint was exactly that. **One knob covers both
+engines** because the fused score is normalized: the lexical term is `LEX_BLEND·(raw/lex_max)`, so a
+fixed floor is *gap-adaptive* on the lexical side (a scattered tail hit next to a strong winner
+normalizes low and drops; when the best hit is itself weak, everything sits near 1.0 and survives)
+and *absolute* on the semantic side, where `(1-LEX_BLEND)·cosine ≥ 0.2` means a semantic-only hit
+needs `cosine ≥ 0.5` — well above `SEM_MIN_COSINE`, which is what cuts the 0.35–0.5 noise band.
+**Why 0.2 and not 0.5:** 0.5 would also drop a legitimate mid-strength lexical substring hit
+(normalized ≈0.6·0.6 with no semantic boost), which is a real match, not noise. Exact hits are
+**exempt** — the "exact never buried" invariant outranks the floor. When every hit is floored out,
+the frontend's existing "No matching snippets." empty state covers it, so the floor needs no
+frontend change.
 
 ## Deliberately out (filed, not dropped)
 
