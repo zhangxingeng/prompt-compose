@@ -29,9 +29,9 @@
 
   let listEl: HTMLDivElement | undefined = $state(undefined);
   /** Index of the hit currently hovered/focused — the ONLY one whose full body is
-   *  rendered. Hover-reveal is the rule everywhere in this redesign (chip, row);
-   *  tying it to focus too (not just mouseenter) means the existing ↑/↓ keyboard
-   *  nav gets the same reveal for free, with no separate keyboard path to build. */
+   *  rendered. Hover-reveal is the pattern for a library row; tying it to focus
+   *  too (not just mouseenter) means the existing ↑/↓ keyboard nav gets the same
+   *  reveal for free, with no separate keyboard path to build. */
   let expandedIdx = $state<number | null>(null);
 
   function hitButtons(): HTMLButtonElement[] {
@@ -243,12 +243,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Hover/focus-reveal of the full body (§1: "hover reveals, click edits" applied
-     to the library too) as a floating tooltip — same pattern as the compose
-     box's chip preview. Absolutely positioned to the RIGHT of the row (not
-     below it) so it overlays the compose area instead of covering the rest of
-     the library list; only the hovered/focused row pays for it, both here and
-     in the {#if expandedIdx === i} above. (Requires the panel's scroll
+  /* Hover/focus-reveal of the full body (the hover-reveal pattern, applied to the
+     library row) as a floating tooltip. Absolutely positioned to the RIGHT of the
+     row (not below it) so it overlays the compose area instead of covering the
+     rest of the library list; only the hovered/focused row pays for it, both here
+     and in the {#if expandedIdx === i} above. (Requires the panel's scroll
      ancestor to allow horizontal overflow — see `.prompts-view__panel` in
      PromptsView.svelte, which deliberately does not set `overflow-y: auto`
      for this reason: that would force `overflow-x` to clip too.) */

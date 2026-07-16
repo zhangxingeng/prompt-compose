@@ -1,8 +1,7 @@
 /**
- * Reactive Prompt Library store (Svelte 5 runes) — same idiom as
- * search.svelte.ts: one exported $state object + setter functions, a light
- * debounce on the live matcher, and a monotonic id so superseded match runs
- * are ignored.
+ * Reactive Prompt Library store (Svelte 5 runes): one exported $state object +
+ * setter functions, a light debounce on the live matcher, and a monotonic id so
+ * superseded match runs are ignored.
  *
  * The compose doc, the variable fills, and the active tab live here (not in
  * components) so a draft prompt survives switching views — leaving Prompts
@@ -329,14 +328,16 @@ export function composeInsertSnippet(content: string): void {
 }
 
 /** One fill input changed. Variables are global by name, so this one value serves
- *  every occurrence — in the fill list under the box and in every chip's popup. */
+ *  every occurrence — in the fill list under the box and in the Save-as-snippet
+ *  popup. */
 export function setFill(name: string, value: string): void {
   prompts.fills[name] = value;
 }
 
-/** The Copy Prompt deliverable: the composed prompt (typed text + every chip's
- *  BODY) through the copy pipeline. Every variable is always hoisted into an
- *  appended `<prompt_vars>` block (round 2 cut the per-variable toggle). */
+/** The Copy Prompt deliverable: the whole composed prompt — the box's flattened
+ *  text, typed and tinted runs alike — through the copy pipeline. Every variable
+ *  is always hoisted into an appended `<prompt_vars>` block (round 2 cut the
+ *  per-variable toggle). */
 export function copyOutput(): string {
   return copyText(flatten(prompts.doc), prompts.fills);
 }

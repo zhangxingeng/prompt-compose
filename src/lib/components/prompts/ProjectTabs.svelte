@@ -76,10 +76,7 @@
   }
 
   function openMenu(e: MouseEvent, p: Project): void {
-    e.preventDefault();
-    // Keep the app-wide CopyContextMenu (a `svelte:window` contextmenu
-    // listener) from also opening on top of this one.
-    e.stopPropagation();
+    e.preventDefault(); // suppress the browser's native context menu
     menu = {
       project: p,
       x: Math.min(e.clientX, window.innerWidth - 224),
