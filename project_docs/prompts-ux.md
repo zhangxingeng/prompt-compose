@@ -1,4 +1,4 @@
-# Prompt Library — Interaction Contract
+# Prompt Compose — Interaction Contract
 
 What the user *does*, and what happens back — scenario by scenario. The sibling to the
 [engineering contract](prompts-design.md), which says what the system *is* (storage, command

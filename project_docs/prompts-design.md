@@ -1,4 +1,4 @@
-# Prompt Library — Engineering Contract
+# Prompt Compose — Engineering Contract
 
 The *engineering* contract: storage, the Rust↔JS command surface, the variable grammar, the match
 engine, and the compose-surface model. It ages with the code — when the implementation changes,
