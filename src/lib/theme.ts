@@ -8,10 +8,21 @@ const STORAGE_KEY = 'promptcompose-theme';
 
 export type Theme = 'light' | 'dark';
 
-/** Return the active theme ('light' | 'dark').  Defaults to 'light'. */
+/** Return the active theme ('light' | 'dark').
+ *
+ *  With no stored preference, falls back to the OS `prefers-color-scheme` —
+ *  matching the pre-paint bootstrap in app.html EXACTLY. If this defaulted to
+ *  'light' instead (as it once did), a dark-OS user with no saved choice would
+ *  see a dark page whose toggle label read "Light" and whose first click was
+ *  eaten (setting dark over dark, no visible change). The two must agree. */
 export function getTheme(): Theme {
   if (typeof localStorage === 'undefined') return 'light';
-  return (localStorage.getItem(STORAGE_KEY) as Theme) ?? 'light';
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored === 'light' || stored === 'dark') return stored;
+  return typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+    ? 'dark'
+    : 'light';
 }
 
 /**
