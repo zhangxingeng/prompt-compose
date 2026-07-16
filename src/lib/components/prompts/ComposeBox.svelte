@@ -23,12 +23,16 @@
   interface Props {
     /** Copy Prompt — the parent owns the clipboard call + toast. */
     onCopy: () => void;
+    /** Clear — empty the box in one click. The parent resets the store (doc,
+     *  caret, fills) so the reset flows back through render, never by poking the
+     *  DOM. */
+    onClear: () => void;
     /** ↓ at the very end steps into the match panel; returns whether the panel had
      *  a hit to land on, so ↓ stays a caret move when the panel is empty. */
     onStepIntoPanel: () => boolean;
   }
 
-  let { onCopy, onStepIntoPanel }: Props = $props();
+  let { onCopy, onClear, onStepIntoPanel }: Props = $props();
 
   let boxEl: HTMLDivElement | undefined = $state(undefined);
 
@@ -309,17 +313,29 @@
     ></div>
 
     {#if hasContent}
-      <!-- Top-right icon, semi-transparent — the affordance every code block on
-           the web already has. -->
-      <button
-        type="button"
-        class="compose__copy"
-        onclick={onCopy}
-        title="Copy prompt"
-        aria-label="Copy prompt"
-      >
-        ⧉
-      </button>
+      <!-- Top-right icons, semi-transparent — the affordance every code block on
+           the web already has. Present only when the box has content, so a no-op
+           Clear (or Copy) is never offered. -->
+      <div class="compose__actions">
+        <button
+          type="button"
+          class="compose__iconbtn"
+          onclick={onClear}
+          title="Clear prompt"
+          aria-label="Clear prompt"
+        >
+          ✕
+        </button>
+        <button
+          type="button"
+          class="compose__iconbtn"
+          onclick={onCopy}
+          title="Copy prompt"
+          aria-label="Copy prompt"
+        >
+          ⧉
+        </button>
+      </div>
     {/if}
   </div>
 </div>
@@ -384,12 +400,16 @@
     box-decoration-break: clone;
   }
 
-  /* Semi-transparent icon, top-right — the affordance every code block on the
-     web already has. Full opacity on hover/focus. */
-  .compose__copy {
+  /* Semi-transparent icons, top-right — the affordance every code block on the
+     web already has. Clear then Copy, so Copy keeps its established corner. */
+  .compose__actions {
     position: absolute;
     top: 0.6rem;
     right: 0.6rem;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .compose__iconbtn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -404,8 +424,8 @@
     opacity: 0.55;
     cursor: pointer;
   }
-  .compose__copy:hover,
-  .compose__copy:focus-visible {
+  .compose__iconbtn:hover,
+  .compose__iconbtn:focus-visible {
     opacity: 1;
     color: var(--text);
     border-color: color-mix(in srgb, var(--accent-snippet) 55%, var(--border));

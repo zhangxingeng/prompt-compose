@@ -17,6 +17,7 @@
     initPrompts,
     disposePrompts,
     composeInsertSnippet,
+    composeClear,
     copyOutput,
     touchSnippet,
   } from '$lib/prompts.svelte';
@@ -94,6 +95,15 @@
   async function copyPrompt(): Promise<void> {
     const ok = await copyToClipboard(copyOutput());
     toasts.push(ok ? 'Prompt copied.' : 'Copy failed — select the text manually.');
+  }
+
+  // ── Clear ─────────────────────────────────────────────────────────────────────
+  /** Empty the box in one click (no confirm — the founder asked for exactly that
+   *  simplicity). The store owns the reset; we just put the caret back so the user
+   *  can start typing immediately. */
+  function clearCompose(): void {
+    composeClear();
+    composeBox?.focus();
   }
 
   // ── view-scoped hotkey — fixed, not rebindable ───────────────────────────────
@@ -196,6 +206,7 @@
       <ComposeBox
         bind:this={composeBox}
         onCopy={copyPrompt}
+        onClear={clearCompose}
         onStepIntoPanel={() => matchPanel?.focusFirst() ?? false}
       />
     </section>
