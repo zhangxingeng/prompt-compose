@@ -431,7 +431,7 @@ mod tests {
     /// shares a name across both, which is legal now that names are only unique
     /// within a project.
     fn seeded_cache() -> (PathBuf, Connection) {
-        let root = std::env::temp_dir().join(format!("ccdeck-embed-cache-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("prompt-compose-embed-cache-{}", uuid::Uuid::new_v4()));
         let conn = open_cache(&root).unwrap();
         for (project, name) in
             [("/a", "keep"), ("/a", "shared"), ("/a", "stale"), ("/b", "shared"), ("/b", "other")]
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     #[ignore = "network + ~75MB download; run explicitly with -- --ignored"]
     fn full_semantic_path_downloads_loads_and_embeds() {
-        let root = std::env::temp_dir().join(format!("ccdeck-embed-e2e-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("prompt-compose-embed-e2e-{}", uuid::Uuid::new_v4()));
         download_artifacts(&root).expect("download + verify + extract");
         assert!(artifacts_present(&root));
 

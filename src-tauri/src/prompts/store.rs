@@ -199,7 +199,7 @@ mod tests {
 
     fn tmp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir()
-            .join(format!("ccdeck-prompts-test-{name}-{}", uuid::Uuid::new_v4()));
+            .join(format!("prompt-compose-prompts-test-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&d).unwrap();
         d
     }
