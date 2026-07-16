@@ -1,6 +1,6 @@
 [package]
 name = "prompt-compose"
-version = "0.1.0"
+version = "0.1.1"
 description = "Offline desktop manager for Markdown prompt snippets"
 authors = ["zhangxingeng"]
 edition = "2021"

@@ -15,9 +15,12 @@
    * the affordances nobody could guess without having read the UX contract, and
    * a handful of tabs does not need its own navigation model.
    *
-   * The `+` button is now the ONLY way to add a project — it opens the native
-   * folder picker directly, no intermediate popover (round 1's
-   * `ProjectManagerPopover` is gone). Rename / change color / delete moved onto
+   * The `+` button opens the native folder picker directly, no intermediate
+   * popover (round 1's `ProjectManagerPopover` is gone). Right-clicking `+`
+   * instead swaps in a small type-a-path input: OS directory pickers hide
+   * dotfolders, so a library living in a hidden folder (e.g. a repo-local
+   * `.prompt_snippets/`) is impossible to ADD through the picker at all — the
+   * typed path is the only route in. Rename / change color / delete moved onto
    * a per-tab right-click menu (`ProjectContextMenu.svelte`) — there is
    * deliberately no "change path": to move a library, delete this project and
    * add the new folder (the folder IS the project's identity).
@@ -38,6 +41,15 @@
 
   let busy = $state(false);
   let menu = $state<{ project: Project; x: number; y: number } | null>(null);
+
+  /** Non-null while the type-a-path input is open (the value being typed).
+   *  Opened by right-clicking `+` — the escape hatch for folders the OS picker
+   *  refuses to show (dotfolders). */
+  let typedPath = $state<string | null>(null);
+  let pathInputEl = $state<HTMLInputElement | null>(null);
+  $effect(() => {
+    pathInputEl?.focus();
+  });
 
   /** The OS directory picker. In browser-dev there is no OS dialog, so fall back
    *  to a typed path — the add-a-project flow stays exercisable without Tauri. */
@@ -61,17 +73,42 @@
     return parts[parts.length - 1] ?? path;
   }
 
-  async function add(): Promise<void> {
-    const path = await pickFolder();
-    if (path === null || path.trim() === '') return;
+  async function commit(rawPath: string | null): Promise<void> {
+    const path = rawPath?.trim();
+    if (!path) return;
     busy = true;
     try {
-      await addProject(basename(path.trim()), path.trim());
+      await addProject(basename(path), path);
       prompts.loadError = null;
     } catch (e) {
       prompts.loadError = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
+    }
+  }
+
+  async function add(): Promise<void> {
+    await commit(await pickFolder());
+  }
+
+  /** Right-click on `+`: open the typed-path input instead of the picker. */
+  function openTypedPath(e: MouseEvent): void {
+    e.preventDefault(); // suppress the browser's native context menu
+    typedPath = '';
+  }
+
+  async function submitTypedPath(): Promise<void> {
+    const path = typedPath;
+    typedPath = null;
+    await commit(path);
+  }
+
+  function onPathKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void submitTypedPath();
+    } else if (e.key === 'Escape') {
+      typedPath = null;
     }
   }
 
@@ -110,16 +147,31 @@
     </button>
   {/each}
 
-  <button
-    type="button"
-    class="project-tabs__add"
-    onclick={add}
-    disabled={busy}
-    title="Add a prompt folder"
-    aria-label="Add a prompt folder"
-  >
-    +
-  </button>
+  {#if typedPath !== null}
+    <input
+      type="text"
+      class="project-tabs__path"
+      bind:this={pathInputEl}
+      bind:value={typedPath}
+      placeholder="/path/to/your/prompt/folder — Enter to add, Esc to cancel"
+      spellcheck="false"
+      onkeydown={onPathKeydown}
+      onblur={() => (typedPath = null)}
+      aria-label="Type a prompt folder path"
+    />
+  {:else}
+    <button
+      type="button"
+      class="project-tabs__add"
+      onclick={add}
+      oncontextmenu={openTypedPath}
+      disabled={busy}
+      title="Add a prompt folder — right-click to type a path (OS pickers hide dotfolders)"
+      aria-label="Add a prompt folder"
+    >
+      +
+    </button>
+  {/if}
 </div>
 
 {#if menu}
@@ -191,5 +243,19 @@
   .project-tabs__add:disabled {
     opacity: 0.55;
     cursor: default;
+  }
+  .project-tabs__path {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    width: min(26rem, 60vw);
+    padding: 0.28rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: var(--bg-subtle);
+    color: var(--text);
+  }
+  .project-tabs__path:focus {
+    outline: none;
+    border-color: var(--border-strong);
   }
 </style>

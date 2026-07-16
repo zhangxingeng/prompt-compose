@@ -54,7 +54,9 @@ pins: a project is a name and a folder, and there is nothing else about it to de
   pick any directory and every `.md` file in it becomes a snippet.*
 - **What you do.** `⋯` → `+ Add a folder…` → the OS directory picker. The folder's own basename
   becomes the project name (you already named it once when you made it); rename it later in the
-  manager if you like.
+  manager if you like. **Right-clicking `+` opens a type-a-path input instead** — the escape hatch
+  for hidden folders (a repo-local `.prompt_snippets/`, say), which OS pickers refuse to show, so
+  the picker alone would make such a library impossible to add. Enter adds, Esc cancels.
 - **Result.** The folder is registered and becomes the active tab — you added it to work in it, so
   the manager closes and gets out of the way. Every `*.md` under it, recursively, is now a snippet.
 
@@ -211,7 +213,8 @@ does not need its own navigation model.
 `⋯` opens the manager: every project as a row with its **path always visible** (a name alone cannot
 tell two folders apart, and "which folder is this?" must never need a hover).
 
-- **Add** — `+ Add a folder…`, OS directory picker.
+- **Add** — `+ Add a folder…`, OS directory picker; right-click `+` to type a path instead
+  (hidden folders never appear in the picker).
 - **Rename** — type in the row's name field. The path is the identity, so a rename is just that; it
   does not switch you to that project.
 - **Remove** — two-step, and the confirm label states the consequence *before* the click rather than

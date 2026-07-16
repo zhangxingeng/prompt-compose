@@ -77,11 +77,16 @@ folder, never in git, never in the user's prompt repo.
 
 ```jsonc
 {
-  "projects": [{ "name": "juror", "path": "/abs/path/.prompt_snippets" }],
-  "active": "/abs/path/.prompt_snippets",
-  "usage": { "/abs/path/.prompt_snippets::rust/code_review": 1720000000 }
+  "projects": [{ "name": "juror", "path": "/abs/path/prompt_snippets" }],
+  "active": "/abs/path/prompt_snippets",
+  "usage": { "/abs/path/prompt_snippets::rust/code_review": 1720000000 }
 }
 ```
+
+A project folder can be any directory, hidden ones included — but prefer a **visible** name like
+`prompt_snippets/` over a dotfolder: OS directory pickers and file managers hide dotfolders, which
+makes the library both awkward to add (the typed-path route is the only way in) and easy to forget
+exists when editing snippet files by hand.
 
 - `usage` is keyed `<project path>::<snippet name>` → last-used epoch, and is the **only** input to
   the at-rest sort order. It lives here rather than in the snippet file for the git-cleanliness

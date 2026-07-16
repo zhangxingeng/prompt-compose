@@ -3004,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "prompt-compose"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs",
  "fastembed",
