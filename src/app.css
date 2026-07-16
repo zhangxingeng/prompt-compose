@@ -1,0 +1,335 @@
+/* CC Deck — global styles. Offline, no CDN.
+   Light/dark via [data-theme] on <html>. */
+
+:root {
+  color-scheme: light;
+
+  /* Live height of .app-header, kept in sync by a ResizeObserver in +page.svelte.
+     Any second-level sticky bar (e.g. BrowseView's .search-bar) must use
+     `top: var(--header-h)` instead of `top: 0` — otherwise, once both the header
+     and the bar are pinned, the bar sticks to the same y=0 and ends up visually
+     covered by the header (which sits above it via a higher z-index). The
+     fallback here only matters for the one frame before JS measures the real
+     height. */
+  --header-h: 56px;
+
+  --bg: #fafafa;
+  --bg-card: #ffffff;
+  --bg-subtle: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text: #1e293b;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+
+  --accent-user: #5b8def;
+  --accent-assistant: #64748b;
+  --accent-thinking: #8b5cf6;
+  --accent-tool: #d4a017;
+  --accent-result-ok: #22c55e;
+  --accent-result-err: #ef4444;
+  --accent-interrupt: #f43f5e;
+  --accent-subagent: #0d9488;
+
+  /* Prompt Library: categorical meaning, not severity. Two things in the
+     compose surface are worth telling apart at a glance, so there are exactly
+     two accents — --accent-snippet marks "this came from the library" (a chip's
+     border/tint/name, the highlighted match row, the active project) and
+     --accent-template marks "this is a variable" (the badges on a chip, and the
+     snippet popup's you-are-editing-the-reusable-template state). Tints are
+     color-mix'd over theme surfaces, so one accent value serves both light and
+     dark — the existing --accent-* convention. */
+  --accent-snippet: #0ea5e9;
+  --accent-template: #d97706;
+
+  /* Compose-surface text selection: highlighter yellow — a bright marker
+     over dark ink in BOTH themes (a real highlighter doesn't invert), so
+     ::selection pairs --highlight with --highlight-foreground instead of
+     inheriting the theme text color, which would be unreadable on yellow
+     in dark mode. */
+  --highlight: #ffe566;
+  --highlight-foreground: #1e293b;
+
+  /* Tool-input JSON syntax highlighting (jt = "json token") */
+  --jt-str: #16a34a;
+  --jt-num: #2563eb;
+  --jt-bool: #9333ea;
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0f172a;
+  --bg-card: #1e293b;
+  --bg-subtle: #0f172a;
+  --border: #334155;
+  --border-strong: #475569;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --text-faint: #64748b;
+
+  --highlight: #ffd60a;
+  --highlight-foreground: #1e293b;
+
+  --jt-str: #4ade80;
+  --jt-num: #60a5fa;
+  --jt-bool: #c084fc;
+}
+
+* { box-sizing: border-box; }
+
+/* Only html gets a definite height. If body also had height:100% (a definite
+   value), a session longer than one viewport would still cap body's own box
+   at 100vh — overflow:visible lets the content spill past it, but a sticky
+   descendant's containing block stays that capped box, so .app-header would
+   stop sticking as soon as you scrolled past the first viewport. body's
+   min-height:100vh below already covers the "fill a short page" case, and
+   leaving height unset here lets it grow to the real content height instead. */
+html { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+a { color: var(--accent-user); }
+
+.container-main {
+  max-width: 820px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem;
+  flex: 1;
+}
+
+/* Header */
+.app-header {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.app-header h1 { font-size: 0.95rem; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.app-header .subtitle { font-size: 0.68rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+.app-header__actions { display: flex; align-items: center; gap: 0.5rem; }
+
+/* Footer */
+.app-footer {
+  text-align: center; padding: 1.25rem; font-size: 0.7rem; color: var(--text-faint);
+  border-top: 1px solid var(--border);
+}
+.app-footer a { color: var(--text-muted); text-decoration: none; }
+.app-footer a:hover { color: var(--text); }
+.app-footer__check {
+  display: block; margin: 0.4rem auto 0; padding: 0; background: none; border: 0;
+  font-family: inherit; font-size: inherit; color: var(--text-faint);
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.app-footer__check:hover { color: var(--text-muted); }
+.app-footer__check:disabled { cursor: default; opacity: 0.5; text-decoration: none; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.45rem 0.9rem; border-radius: 0.4rem;
+  font-size: 0.8rem; font-weight: 500; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text);
+  transition: background 0.12s, border-color 0.12s; font-family: inherit;
+}
+.btn:hover { border-color: var(--text-muted); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn--primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn--primary:hover { opacity: 0.9; }
+.btn--danger { color: var(--accent-result-err); border-color: color-mix(in srgb, var(--accent-result-err) 40%, var(--border)); }
+.btn--danger:hover { background: color-mix(in srgb, var(--accent-result-err) 8%, transparent); }
+.btn--sm { font-size: 0.7rem; padding: 0.25rem 0.6rem; }
+.btn--ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+.btn--ghost:hover { background: var(--bg-subtle); color: var(--text); }
+
+/* Welcome / empty states */
+.welcome { text-align: center; padding: 3.5rem 1rem; }
+.welcome h2 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.5rem; }
+.welcome p { color: var(--text-muted); font-size: 0.85rem; margin: 0.4rem 0 1.5rem; }
+.empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-faint); font-size: 0.85rem; }
+
+/* Session list */
+.project-group { margin-bottom: 1.5rem; }
+.project-group__head {
+  display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.4rem;
+}
+.project-group__name {
+  font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-faint); padding: 0 0.25rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  padding: 0.6rem 0.75rem; border-radius: 0.4rem; cursor: pointer;
+  border: 1px solid transparent; transition: background 0.1s, border-color 0.1s;
+  margin-bottom: 2px; width: 100%; text-align: left; background: none; font-family: inherit; color: inherit;
+}
+.session-card:hover { background: var(--bg-card); border-color: var(--border); }
+.session-card__title { font-size: 0.85rem; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-card__meta { font-size: 0.7rem; color: var(--text-faint); white-space: nowrap; flex-shrink: 0; }
+
+/* Message cards (viewer) */
+.msg { position: relative; margin-bottom: 0.9rem; }
+.msg__inner { padding: 0.8rem 1.05rem; border-radius: 0.45rem; background: var(--bg-card); border: 1px solid var(--border); }
+.msg::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 3px 0 0 3px; }
+.msg--user::before { background: var(--accent-user); }
+.msg--assistant::before { background: var(--accent-assistant); }
+.msg--thinking::before { background: var(--accent-thinking); }
+.msg--tool::before { background: var(--accent-tool); }
+.msg--result::before { background: var(--accent-result-ok); }
+.msg--result.error::before { background: var(--accent-result-err); }
+.msg--interrupt::before { background: var(--accent-interrupt); }
+
+.msg__label {
+  display: inline-block; font-size: 0.6rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  padding: 0.12rem 0.45rem; border-radius: 0.2rem; margin-bottom: 0.4rem; user-select: none;
+}
+.msg--user .msg__label { color: var(--accent-user); background: color-mix(in srgb, var(--accent-user) 12%, transparent); }
+.msg--assistant .msg__label { color: var(--accent-assistant); background: color-mix(in srgb, var(--accent-assistant) 12%, transparent); }
+.msg--thinking .msg__label { color: var(--accent-thinking); background: color-mix(in srgb, var(--accent-thinking) 12%, transparent); }
+.msg--tool .msg__label { color: var(--accent-tool); background: color-mix(in srgb, var(--accent-tool) 12%, transparent); }
+.msg--result .msg__label { color: var(--accent-result-ok); background: color-mix(in srgb, var(--accent-result-ok) 12%, transparent); }
+.msg--result.error .msg__label { color: var(--accent-result-err); background: color-mix(in srgb, var(--accent-result-err) 12%, transparent); }
+
+.msg__body { font-size: 0.875rem; line-height: 1.7; word-wrap: break-word; }
+.msg__body p { margin: 0.35rem 0; }
+.msg__body p:first-child { margin-top: 0; }
+.msg__body p:last-child { margin-bottom: 0; }
+.msg__body pre { background: var(--bg-subtle); padding: 0.75rem 0.9rem; border-radius: 0.3rem; overflow-x: auto; font-size: 0.75rem; line-height: 1.5; font-family: var(--font-mono); border: 1px solid var(--border); }
+.msg__body code { font-size: 0.82em; background: var(--bg-subtle); padding: 0.1em 0.3em; border-radius: 0.2em; font-family: var(--font-mono); }
+.msg__body pre code { background: none; padding: 0; border: 0; }
+.msg__body ul, .msg__body ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+.msg__body table { border-collapse: collapse; font-size: 0.8rem; margin: 0.5rem 0; }
+.msg__body th, .msg__body td { border: 1px solid var(--border); padding: 0.3rem 0.6rem; }
+.msg--thinking .msg__body { font-style: italic; color: var(--text-muted); font-size: 0.8rem; }
+
+/* Collapsible thinking / tool sections */
+.collapsible { cursor: pointer; user-select: none; display: inline-flex; align-items: center; }
+.collapsible .toggle-icon { display: inline-block; transition: transform 0.12s; font-size: 0.65rem; margin-left: 0.3rem; opacity: 0.55; }
+.collapsible.open .toggle-icon { transform: rotate(90deg); }
+.collapse-body { display: none; margin-top: 0.5rem; }
+.collapse-body.open { display: block; }
+
+.tool-section { margin-top: 0.4rem; }
+.tool-section__heading { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 0.25rem; }
+.tool-json {
+  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 0.3rem;
+  padding: 0.6rem 0.85rem; overflow-x: auto; font-family: var(--font-mono); font-size: 0.72rem;
+  line-height: 1.45; white-space: pre-wrap; word-break: break-word; max-height: 22em; overflow-y: auto; margin: 0;
+}
+
+/* JSON syntax token colors (see src/lib/jsonHighlight.ts) */
+.jt-key { color: var(--accent-tool); }
+.jt-str { color: var(--jt-str); }
+.jt-num { color: var(--jt-num); }
+.jt-bool { color: var(--jt-bool); }
+.jt-null { color: var(--text-faint); }
+
+/* Tool input: collapsed to key-name chips, click opens the popover with the
+   full highlighted JSON (Block.svelte). */
+.tool-input-chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; width: 100%;
+  padding: 0.4rem 0.55rem; background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: 0.3rem; cursor: pointer; font-family: inherit; text-align: left;
+}
+.tool-input-chips:hover { border-color: var(--border-strong); }
+.tool-input-chip {
+  font-size: 0.68rem; font-family: var(--font-mono); color: var(--text-muted);
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 0.25rem;
+  padding: 0.08rem 0.4rem;
+}
+.tool-input-chips__expand { margin-left: auto; font-size: 0.68rem; color: var(--accent-tool); font-weight: 600; white-space: nowrap; }
+
+.tool-input-modal { max-width: 640px; }
+.tool-input-modal .tool-json { margin-bottom: 0.75rem; }
+.tool-input-longstring { margin-bottom: 0.75rem; }
+.tool-input-longstring__bar { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.3rem; }
+.tool-input-longstring__key { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); }
+
+.interrupt-banner {
+  display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.75rem; margin: 0.75rem 0;
+  background: color-mix(in srgb, var(--accent-interrupt) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-interrupt) 22%, transparent);
+  border-radius: 0.3rem; font-size: 0.75rem; color: var(--accent-interrupt); font-weight: 500;
+}
+
+/* Subagent open affordance — opens the nested transcript in the stacked
+   navigation view (SessionEditor's subagentStack) instead of rendering it
+   inline. */
+.subagent-open {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%; margin-top: 0.5rem;
+  padding: 0.5rem 0.7rem; background: color-mix(in srgb, var(--accent-subagent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-subagent) 30%, transparent); border-radius: 0.4rem;
+  color: var(--text); font-family: inherit; font-size: 0.8rem; cursor: pointer; text-align: left;
+}
+.subagent-open:hover {
+  background: color-mix(in srgb, var(--accent-subagent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent-subagent) 45%, transparent);
+}
+.subagent-open__icon { color: var(--accent-subagent); font-size: 0.7rem; }
+.subagent-open__label { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-open__meta { color: var(--text-muted); font-size: 0.72rem; white-space: nowrap; }
+.subagent-open__cta { color: var(--accent-subagent); font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+
+.back-link { font-size: 0.8rem; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; margin-bottom: 1rem; background: none; border: 0; font-family: inherit; padding: 0; }
+.back-link:hover { color: var(--text); }
+
+/* Edit affordances */
+.msg__actions { position: absolute; top: 0.4rem; right: 0.5rem; display: none; gap: 0.25rem; }
+.msg:hover .msg__actions { display: flex; }
+.msg--editing .msg__inner { outline: 2px solid var(--accent-user); }
+.editor-textarea {
+  width: 100%; min-height: 6rem; padding: 0.6rem 0.8rem; border-radius: 0.35rem;
+  border: 1px solid var(--border-strong); background: var(--bg-subtle); color: var(--text);
+  font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; resize: vertical;
+}
+
+/* Modal */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 1rem; }
+.modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: 0.6rem; max-width: 460px; width: 100%; padding: 1.5rem; box-shadow: 0 12px 40px rgba(0,0,0,0.2); }
+.modal h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+.modal p { font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0; }
+.modal__warning { background: color-mix(in srgb, var(--accent-result-err) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent-result-err) 25%, transparent); border-radius: 0.4rem; padding: 0.6rem 0.8rem; font-size: 0.8rem; color: var(--accent-result-err); margin: 0.75rem 0; }
+.modal__actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
+
+/* Toast */
+.toast { position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 0.6rem 1.1rem; border-radius: 0.5rem; font-size: 0.8rem; z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+
+@media (max-width: 640px) {
+  .container-main { padding: 1rem 0.85rem; }
+  .app-header { padding: 0.6rem 0.85rem; }
+}
+
+/* Print — Export PDF (issue #36).
+   +page.svelte mounts a read-only SessionView inside `.print-only` while
+   printing; here we hide the live app chrome (header, footer, and the editor in
+   <main>) and reveal that clean render, so the OS "Save as PDF" captures only
+   the conversation. The `.print-only` node is display:none on screen and only
+   ever visible under print media. */
+.print-only { display: none; }
+@media print {
+  .app-header,
+  .app-footer,
+  main.container-main { display: none !important; }
+  .print-only { display: block !important; }
+  /* Let a full-bleed conversation use the whole page rather than the app's
+     narrow reading column. */
+  .print-only .container-main { max-width: none; padding: 0; }
+}
