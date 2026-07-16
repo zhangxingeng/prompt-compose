@@ -46,6 +46,26 @@ const LEX_BLEND: f32 = 0.6;
 /// floor, low-similarity vectors pad the panel with head-scratchers.
 const SEM_MIN_COSINE: f32 = 0.35;
 
+/// The panel's relevance floor, applied to the fused score under a NON-EMPTY
+/// query only (the at-rest listing is scored 0.0 and must never be filtered — a
+/// floor there would hide the whole library). Below it, a hit drops out instead
+/// of reappearing in a reordered-but-complete list. Founder's complaint this
+/// answers: "otherwise it's just always going to show all the prompts reordered,
+/// regardless of low similarity score."
+///
+/// **Why 0.2, and one knob for two engines.** The fused score is normalized:
+/// lexical is `LEX_BLEND·(raw/lex_max)`, semantic-only is `(1-LEX_BLEND)·cosine`.
+/// Because the lexical term divides by `lex_max`, a fixed floor is *gap-adaptive*
+/// on the lexical side (a scattered tail hit next to a strong winner normalizes
+/// low and drops; when the best hit is itself weak, everything sits near 1.0 and
+/// survives) and *absolute* on the semantic side. At 0.2 a semantic-only hit
+/// needs `cosine ≥ 0.5` to survive — well above `SEM_MIN_COSINE`, which is what
+/// cuts the 0.35–0.5 noise band. 0.5 would be too aggressive: a legitimate
+/// mid-strength lexical substring hit (normalized ~0.6·0.6 with no semantic
+/// boost) would wrongly drop. Exact hits are exempt — the "exact never buried"
+/// invariant outranks the floor.
+const MATCH_MIN_SCORE: f32 = 0.2;
+
 /// One match result. A snippet's `name` is its identity, so that is all a hit
 /// needs to carry.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -186,7 +206,14 @@ fn fuse(lex: Vec<(String, f32, bool)>, sem: Vec<(String, f32)>, limit: usize) ->
             .cmp(a_exact)
             .then(b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
     });
-    hits.into_iter().map(|(h, _)| h).take(limit).collect()
+    // Drop hits below the panel's relevance floor, so a non-empty query narrows to
+    // genuine matches rather than reordering the whole library. Exact hits are
+    // exempt — their hard rank floor outranks the relevance floor.
+    hits.into_iter()
+        .filter(|(h, exact)| *exact || h.score >= MATCH_MIN_SCORE)
+        .map(|(h, _)| h)
+        .take(limit)
+        .collect()
 }
 
 /// The at-rest order, for an empty query: most recently used first, then the
@@ -433,5 +460,38 @@ mod tests {
         let lex = vec![("plain".to_string(), 1.0, false), ("boosted".to_string(), 1.0, false)];
         let sem = vec![("boosted".to_string(), 0.9)];
         assert_eq!(fuse(lex, sem, 10)[0].name, "boosted");
+    }
+
+    // --- the panel relevance floor (MATCH_MIN_SCORE) ---
+
+    #[test]
+    fn a_weak_lexical_tail_hit_drops_below_the_relevance_floor() {
+        // Normalized against a strong winner (lex_max = 5.0), the scattered tail
+        // hit fuses to 0.6·(0.5/5) = 0.06 — below the 0.2 floor — so it leaves the
+        // panel instead of padding it. The winner (0.6) stays.
+        let lex = vec![("winner".to_string(), 5.0, false), ("tail".to_string(), 0.5, false)];
+        let names: Vec<String> = fuse(lex, vec![], 10).into_iter().map(|h| h.name).collect();
+        assert_eq!(names, ["winner"]);
+    }
+
+    #[test]
+    fn a_semantic_only_hit_below_the_relevance_floor_is_dropped() {
+        // cosine 0.45 clears SEM_MIN_COSINE but fuses to 0.4·0.45 = 0.18 (< 0.2),
+        // so it drops; 0.6 → 0.24 survives. This is the semantic 0.35–0.5 noise
+        // band the floor exists to cut.
+        let sem = vec![("weak".to_string(), 0.45), ("strong".to_string(), 0.6)];
+        let names: Vec<String> = fuse(vec![], sem, 10).into_iter().map(|h| h.name).collect();
+        assert_eq!(names, ["strong"]);
+    }
+
+    #[test]
+    fn an_exact_hit_survives_the_relevance_floor() {
+        // A middling exact hit next to a much stronger fuzzy hit (lex_max = 5.0)
+        // normalizes to 0.6·(0.5/5) = 0.06, below the floor — but exact is exempt
+        // and still leads.
+        let lex = vec![("exact".to_string(), 0.5, true), ("big".to_string(), 5.0, false)];
+        let hits = fuse(lex, vec![], 10);
+        assert_eq!(hits[0].name, "exact", "exact leads and is not floored out");
+        assert!(hits.iter().any(|h| h.name == "big"));
     }
 }
