@@ -20,7 +20,7 @@
     copyOutput,
     touchSnippet,
   } from '$lib/prompts.svelte';
-  import { chipAt, flatten } from '$lib/compose/doc';
+  import { flatten } from '$lib/compose/doc';
   import { parseVariables } from '$lib/compose/variables';
   import { copyToClipboard } from '$lib/copy';
   import { toasts } from '$lib/prompts/toasts.svelte';
@@ -61,33 +61,27 @@
     window.removeEventListener('keydown', onWindowKeydown);
   });
 
-  // ── insert flow: one path, the chip replaces the query line ──────────────────
+  // ── insert flow: one path, the tinted snippet replaces the query line ────────
   async function handleInsert(snippet: Snippet): Promise<void> {
-    composeInsertSnippet(snippet.name, snippet.content);
+    composeInsertSnippet(snippet.content);
     // Using a snippet is the ONLY thing that feeds the at-rest sort, so the
     // insert path is where it has to be recorded — this is what makes the panel
     // open on what you actually reach for.
     await touchSnippet(snippet.name);
   }
 
-  // ── the popup: two entrances, one surface ────────────────────────────────────
-  // Clicking a chip, or the library's `+` button. Those are the only two ways a
-  // snippet body is ever edited — which is the whole point of the redesign. The
-  // compose box used to offer a third (Save as snippet); that path is cut —
-  // "the compose box is for orchestrating snippets into a prompt. The library
-  // is where snippets are made."
-
-  /** Clicking a chip. The doc holds the chip's current name and content, so the
-   *  popup opens on what the box actually shows. */
-  function openChip(cid: string): void {
-    const chip = chipAt(prompts.doc, cid);
-    if (chip === undefined) return; // deleted out from under the click
-    modalContext = { cid, name: chip.name, content: chip.content, dirty: chip.dirty };
-  }
+  // ── the popup: one entrance, one surface ─────────────────────────────────────
+  // The library's `+` button — the only in-app way a snippet is created. An
+  // inserted snippet is now just tinted editable text with no link to its file,
+  // so there is nothing to click into and edit: editing composed text writes
+  // nothing to the library. Editing or deleting an existing snippet is done in
+  // the filesystem — a snippet IS a `.md` file, so that is `$EDITOR` / Finder,
+  // not an in-app editor. "The compose box is for orchestrating snippets into a
+  // prompt. The library is where snippets are made."
 
   /** The library's `+` button: create a new snippet from scratch. Blank context
-   *  (no `cid`, no `name`) hits the modal's existing `!fromChip` create branch —
-   *  this is just a new trigger for it, and now the ONLY in-app one. */
+   *  (no `name`) opens the modal on an empty snippet — the one explicit
+   *  Save-as-snippet action. */
   function createSnippet(): void {
     if (prompts.activeProjectPath === null) {
       toasts.push('Add a prompt folder first');
@@ -201,7 +195,6 @@
     <section class="prompts-view__compose">
       <ComposeBox
         bind:this={composeBox}
-        onOpenChip={openChip}
         onCopy={copyPrompt}
         onStepIntoPanel={() => matchPanel?.focusFirst() ?? false}
       />

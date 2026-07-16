@@ -12,7 +12,6 @@ import type { Snippet, Project } from './prompts/types';
 import {
   listSnippets,
   saveSnippet as apiSaveSnippet,
-  deleteSnippet as apiDeleteSnippet,
   listProjects,
   addProject as apiAddProject,
   setProjectColor as apiSetProjectColor,
@@ -26,12 +25,8 @@ import {
   type Caret,
   type RawNode,
   emptyDoc,
-  newCid,
   fromRawNodes,
-  insertChip,
-  replaceChipContent,
-  retargetChip,
-  dissolveChip,
+  insertSnippet,
   flatten,
   caretQuery,
 } from './compose/doc';
@@ -71,14 +66,14 @@ export const prompts = $state({
   caret: null as Caret | null,
   /** The text of the node the caret is in — the live-match query reads it. */
   caretText: '',
-  /** Bumped ONLY when the doc changes from outside the box (a panel insert, a
-   *  popup save/delete). The box repaints on this and nothing else: repainting on
-   *  `doc` itself would fire on every keystroke and destroy the user's caret. */
+  /** Bumped ONLY when the doc changes from outside the box (a panel insert). The
+   *  box repaints on this and nothing else: repainting on `doc` itself would fire
+   *  on every keystroke and destroy the user's caret. */
   renderNonce: 0,
-  /** After an external insert, the chip the caret should land after — so the next
-   *  keystroke continues the sentence rather than landing where the browser
-   *  guessed. Consumed (nulled) by the box once placed. */
-  pendingCaretCid: null as string | null,
+  /** After an external insert, where the caret should land (just past the inserted
+   *  text) so the next keystroke continues the sentence rather than landing where
+   *  the browser guessed. Consumed (nulled) by the box once placed. */
+  pendingCaret: null as Caret | null,
   /** Unified variable fill values, keyed by name (grammar rule 4: one name =
    *  one variable document-wide). Entries for names no longer in the doc are
    *  kept — retyping a name recalls its value; copy only reads live names. */
@@ -296,7 +291,7 @@ function errText(e: unknown): string {
  * sees, and repainting it would take their caret with it.
  */
 export function composeSetDoc(raw: RawNode[]): void {
-  prompts.doc = fromRawNodes(raw, prompts.doc);
+  prompts.doc = fromRawNodes(raw);
   scheduleMatch();
 }
 
@@ -309,59 +304,27 @@ export function composeSetCaret(caret: Caret | null, text: string): void {
   scheduleMatch();
 }
 
-/** The box has placed the caret after a freshly inserted chip. */
+/** The box has placed the caret after a freshly inserted snippet. */
 export function clearPendingCaret(): void {
-  prompts.pendingCaretCid = null;
+  prompts.pendingCaret = null;
 }
 
 /**
- * Insert a snippet as a chip, consuming the query line the user typed to find it.
- * The single insert path behind both triggers (clicking a match, and ↓-into-panel
- * then Enter).
+ * Insert a snippet's body as a tinted run, consuming the query line the user
+ * typed to find it. The single insert path behind both triggers (clicking a
+ * match, and ↓-into-panel then Enter).
  *
- * The chip carries the body; the box shows only the name and the variables. The
- * body's `{var}` tokens merge into the one global fill list by name, and resolve
- * at copy time.
+ * The inserted text is ordinary editable text with a tint marking its template
+ * provenance — no link back to the library file. Its `{var}` tokens merge into
+ * the one global fill list by name (they are parsed out of the flattened prompt
+ * like any other text) and resolve at copy time.
  */
-export function composeInsertSnippet(name: string, content: string): void {
-  const cid = newCid();
-  prompts.doc = insertChip(prompts.doc, prompts.caret ?? { node: 0, offset: 0 }, {
-    cid,
-    name,
-    content,
-  });
+export function composeInsertSnippet(content: string): void {
+  const { doc, caret } = insertSnippet(prompts.doc, prompts.caret ?? { node: 0, offset: 0 }, content);
+  prompts.doc = doc;
+  prompts.pendingCaret = caret;
   prompts.matchQuery = ''; // the query line was consumed by the insert
   scheduleMatch(); // clears the now-stale suggestions
-  prompts.pendingCaretCid = cid;
-  prompts.renderNonce++;
-}
-
-/** The popup's session-only `Save` (round 1's `Use once`, renamed): this chip,
- *  this prompt, nothing written to the library. The escape hatch that makes "a
- *  chip is never editable in place" tolerable rather than a cage — tweak a
- *  prompt without polluting the library. Diverges the chip from its saved
- *  file, so it marks `dirty`. */
-export function composeUseOnce(cid: string, content: string): void {
-  prompts.doc = replaceChipContent(prompts.doc, cid, content, true);
-  prompts.renderNonce++;
-}
-
-/** The popup's `Update` saved this chip's file under `name`. Same name → the file
- *  was updated and the chip just reflects it; a new name → a new file, and the
- *  chip retargets to the snippet it now actually is. One transform covers both,
- *  which is exactly why "Save as new" no longer needs a button of its own.
- *  Clears `dirty`: writing the file is what resolves any session-only divergence
- *  — retargetChip does this unconditionally, so the caller passes nothing. */
-export function composeSaveChip(cid: string, name: string, content: string): void {
-  prompts.doc = retargetChip(prompts.doc, cid, name, content);
-  prompts.renderNonce++;
-}
-
-/** The popup deleted this chip's snippet. The file is gone; the words stay, as
- *  plain typed text. Deleting a library entry must not silently mutilate the
- *  prompt someone is halfway through writing. */
-export function composeDissolveChip(cid: string): void {
-  prompts.doc = dissolveChip(prompts.doc, cid);
   prompts.renderNonce++;
 }
 
@@ -394,10 +357,3 @@ export async function saveSnippet(project: string, name: string, content: string
   return saved;
 }
 
-/** Remove the file from the project. What happens to a chip pointing at it is the
- *  compose surface's business (`composeDissolveChip`) — the words stay. */
-export async function deleteSnippet(project: string, name: string): Promise<void> {
-  await apiDeleteSnippet(project, name);
-  prompts.snippets = prompts.snippets.filter((s) => s.name !== name);
-  scheduleMatch();
-}

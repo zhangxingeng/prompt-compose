@@ -1,80 +1,55 @@
 /**
  * The compose-box document model: a flat list of nodes, each either free-typed
- * text or an inserted snippet (a "chip"). Pure data + pure transforms — no DOM,
- * no Svelte. The Doc is the single source of truth; the contenteditable is only
- * an input device.
+ * `text` or `tint` — the body of an inserted snippet, marked with a tint that
+ * signals template provenance. Pure data + pure transforms — no DOM, no Svelte.
+ * The Doc is the single source of truth; the contenteditable is only an input
+ * device.
  *
- * ── Why this is a node list and not the old span model ───────────────────────
+ * ── Why tinted text, and not chips ───────────────────────────────────────────
  *
- * Until v0.13 a Doc was one `text` string plus `spans[]` annotating ranges of it,
- * under the invariant `sum(span.length) === text.length` — spans TILE the text.
- * That invariant is precisely what had to die.
+ * Until phase 3 an inserted snippet was a `chip`: a `contenteditable="false"`
+ * atom that RENDERED as its name + variables but CONTRIBUTED its whole body to
+ * the copied prompt. That rendered≠contributed split was the source of a defect
+ * class — the chip carried a link back to a library file, and keeping composed
+ * text in sync with that file (the old `linked-modified` provenance) produced
+ * silent divergence bugs.
  *
- * A chip RENDERS as its name and the variables it contains, but CONTRIBUTES its
- * whole body to the copied prompt. Rendered ≠ contributed. The tiling invariant
- * asserts they are equal, so no amount of guarding could have grown a chip on top
- * of it: a <textarea> can only render the characters it contains, which is exactly
- * why a snippet's body used to sit in the box as editable text — and exactly why
- * editing it in place was possible at all.
+ * The founder's decision deletes the split at the root: an inserted snippet is
+ * now its WHOLE body text, dropped into the box as ordinary editable text and
+ * tinted to show it came from a template. **There is no link back to the library
+ * file.** Once inserted, the text is just text with a tint — editing it touches
+ * nothing on disk, so the divergence class cannot return. The library is written
+ * only through an explicit Save-as-snippet action, never as a side effect of
+ * editing composed text.
  *
- * That inline edit was the whole defect. It silently diverged the composed text
- * from the stored snippet and flipped the span into a third provenance state,
- * `linked-modified`, which persisted nothing: two places to edit one thing, with
- * different consequences and no signal about which was which.
- *
- * So a chip is an ATOM. It cannot be split, clipped, or partially selected —
- * which is why the entire clip-and-demote algebra of the old model (applyEdit's
- * transition table, linkRange, replaceSpan, spanStarts, diffTexts) is deleted
- * rather than ported, and why `linked-modified` goes with it. A chip that cannot
- * be edited in place cannot be modified in place. Editing happens in the popup,
- * always, and nowhere else.
+ * Rendered == contributed again, which is why the entire chip apparatus is gone:
+ * no `cid` instance identity, no body-carried-on-the-node, no ZWSP caret
+ * scaffolding, no popup edit surface, no `dirty` state, no clip-and-demote
+ * algebra. A `tint` node is just a `text` node wearing a highlight; both carry
+ * editable text, and `flatten` returns exactly what the box shows.
  */
-import { parseVariables } from './variables';
 
-/** Free-typed text. Freely editable — the box is still a text box. */
+/** Free-typed text. */
 export interface TextNode {
   kind: 'text';
   text: string;
 }
 
 /**
- * An inserted snippet. Atomic: never inline-editable, never split.
- *
- * `content` is the snippet's body, carried ON the chip rather than read through
- * to the library by name. That is deliberate, and it is what makes `Use once`
- * possible at all: a chip may legitimately differ from the file of the same name
- * because the user tweaked it for this one prompt without polluting their
- * library. Carrying the body also makes a composed draft durable — the library
- * changing, or the snippet being deleted outright, cannot reach in and mutate or
- * gut a prompt someone is halfway through writing.
- *
- * `cid` identifies this chip INSTANCE, not the snippet: the same snippet can be
- * inserted twice, and `Use once` on one copy must not touch the other.
- *
- * `dirty` marks a chip that has diverged from the library file its name still
- * points at — set by a session-only `Save` (round 2's renamed `Use once`),
- * cleared by `Update` (the disk-write path) and by a fresh insert. Absent or
- * `false` means "still identical to the saved file." Never written to disk —
- * it describes a draft's relationship to the file, not the file itself.
+ * An inserted snippet's body — ordinary editable text, tinted to signal it came
+ * from a template. Carries no snippet identity and no library link: the tint is a
+ * pure visual flag, so a `tint` node and a `text` node differ only in how the box
+ * paints them. Editing a tinted run writes nothing to the library.
  */
-export interface ChipNode {
-  kind: 'chip';
-  cid: string;
-  name: string;
-  content: string;
-  dirty?: boolean;
+export interface TintNode {
+  kind: 'tint';
+  text: string;
 }
 
-export type Node = TextNode | ChipNode;
+export type Node = TextNode | TintNode;
 
 export interface Doc {
   nodes: Node[];
-}
-
-/** A fresh chip-instance id. Only ever compared for equality — its shape is not
- *  a contract, and it is never persisted (a chip lives in a draft, not on disk). */
-export function newCid(): string {
-  return crypto.randomUUID();
 }
 
 export function emptyDoc(): Doc {
@@ -87,244 +62,147 @@ export function docFromText(text: string): Doc {
 }
 
 /**
- * Canonical form: no empty text nodes, no two adjacent text nodes, no duplicate
- * chip ids.
+ * Canonical form: no empty nodes, no two adjacent nodes of the same kind.
  *
- * The duplicate-id sweep is a correctness guard, not tidiness. Copy/pasting a chip
- * inside the box hands us the same `cid` twice; if both survived, `Use once` on one
- * instance would silently rewrite the other — the very silent-divergence class this
- * redesign exists to kill, arriving through the clipboard. The later copy keeps the
- * body and gets a fresh identity, which is what a copy IS.
+ * Merging adjacent same-kind runs keeps the model minimal — two snippets inserted
+ * back to back collapse into one tinted run, which is fine because the tint is
+ * only a flag, not an identity. Adjacent nodes of DIFFERENT kind stay separate:
+ * that boundary is where the paint changes.
  */
 export function normalize(doc: Doc): Doc {
   const nodes: Node[] = [];
-  const seen = new Set<string>();
-
   for (const n of doc.nodes) {
-    if (n.kind === 'text') {
-      if (!n.text) continue;
-      const prev = nodes[nodes.length - 1];
-      if (prev?.kind === 'text') prev.text += n.text;
-      else nodes.push({ ...n });
-      continue;
-    }
-    const cid = seen.has(n.cid) ? newCid() : n.cid;
-    seen.add(cid);
-    nodes.push({ ...n, cid });
+    if (!n.text) continue; // drop empties
+    const prev = nodes[nodes.length - 1];
+    if (prev && prev.kind === n.kind) prev.text += n.text;
+    else nodes.push({ ...n });
   }
   return { nodes };
 }
 
-/**
- * The composed prompt's raw text: typed text and each chip's CONTENT, in order.
- *
- * This is the seam where rendered and contributed diverge — the box shows a chip
- * as a short label, and this returns its whole body. Everything downstream (the
- * variable fill list, Copy Prompt) reads this, never the rendered form.
- */
+/** The composed prompt's raw text: every node's text, in order. Rendered ==
+ *  contributed now, so this is simply what the box shows. Everything downstream
+ *  (the variable fill list, Copy Prompt) reads this. */
 export function flatten(doc: Doc): string {
-  return doc.nodes.map((n) => (n.kind === 'text' ? n.text : n.content)).join('');
-}
-
-/** The chip with this id, or undefined. */
-export function chipAt(doc: Doc, cid: string): ChipNode | undefined {
-  const n = doc.nodes.find((node) => node.kind === 'chip' && node.cid === cid);
-  return n?.kind === 'chip' ? n : undefined;
-}
-
-/** The variable names a chip's body uses — the chip's label shows these, and its
- *  popup fills exactly these. Derived from the body, never stored: the body is the
- *  single source of truth, and a stored copy could only drift from it. */
-export function chipVariables(chip: ChipNode): string[] {
-  return parseVariables(chip.content).map((v) => v.name);
+  return doc.nodes.map((n) => n.text).join('');
 }
 
 /**
- * Where a caret sits.
- *
- * `node` indexes doc.nodes. If that node is TEXT, `offset` is the character
- * offset within it. If it is a CHIP — or `node` is past the end — the caret is
- * an insertion point *before* that index, with no text to split. Both cases are
- * real: a caret genuinely can sit between two adjacent chips, where the model
- * holds no text node at all.
- *
- * Chips are atomic, so a caret is never *inside* one.
+ * Where a caret sits. `node` indexes `doc.nodes`; `offset` is the character
+ * offset within that node's text. Every node carries text now (a `tint` run is
+ * editable), so a caret is always a position inside some node's text — there is
+ * no atom to sit beside.
  */
 export interface Caret {
   node: number;
   offset: number;
 }
 
+/** The `{node, offset}` for a character offset into `flatten(doc)`. At an exact
+ *  node boundary it prefers the START of the next node over the END of the
+ *  current one, so a caret placed just past an inserted snippet lands in the
+ *  following free text rather than at the trailing edge of the tint (where typing
+ *  would otherwise inherit the tint). */
+export function caretAtGlobalOffset(doc: Doc, globalOffset: number): Caret {
+  let remaining = Math.max(0, globalOffset);
+  for (let i = 0; i < doc.nodes.length; i++) {
+    const len = doc.nodes[i].text.length;
+    const isLast = i === doc.nodes.length - 1;
+    if (remaining < len || (remaining === len && isLast)) {
+      return { node: i, offset: remaining };
+    }
+    remaining -= len;
+  }
+  // Past the end (or empty doc): clamp to the last node's end.
+  const last = doc.nodes.length - 1;
+  return last >= 0 ? { node: last, offset: doc.nodes[last].text.length } : { node: 0, offset: 0 };
+}
+
 /**
- * Insert a snippet as a chip, replacing the query line the user typed to find it
- * (from the start of the caret's line up to the caret).
+ * Insert a snippet as a tinted run, replacing the query line the user typed to
+ * find it (from the start of the caret's line up to the caret).
  *
  * The query was scaffolding — the user typed "senior review" only to summon the
- * snippet, so leaving it sitting in front of the inserted chip is litter. This is
- * the single insert path behind both triggers: clicking a match, and ↓-into-panel
+ * snippet, so leaving it in front of the inserted text is litter. This is the
+ * single insert path behind both triggers: clicking a match, and ↓-into-panel
  * then Enter.
+ *
+ * Returns the new doc AND the caret position just past the inserted text, so the
+ * next keystroke continues the sentence. The leading/trailing remnants keep the
+ * kind of the node the caret was in — splitting a tinted run leaves both halves
+ * tinted; splitting free text leaves both halves free.
  */
-export function insertChip(doc: Doc, caret: Caret, chip: Omit<ChipNode, 'kind'>): Doc {
+export function insertSnippet(
+  doc: Doc,
+  caret: Caret,
+  text: string
+): { doc: Doc; caret: Caret } {
   const at = Math.max(0, Math.min(caret.node, doc.nodes.length));
   const node = doc.nodes[at];
-  const chipNode: ChipNode = { kind: 'chip', ...chip };
+  const tintNode: TintNode = { kind: 'tint', text };
 
-  // The caret sits between nodes (before a chip, or past the end): there is no
-  // query text to consume, so just land the chip there.
-  if (!node || node.kind !== 'text') {
-    return normalize({
-      nodes: [...doc.nodes.slice(0, at), chipNode, ...doc.nodes.slice(at)],
-    });
+  // The caret is past the end of the model: just append.
+  if (!node) {
+    const result = normalize({ nodes: [...doc.nodes, tintNode] });
+    return { doc: result, caret: caretAtGlobalOffset(result, flatten(result).length) };
   }
 
   const offset = Math.max(0, Math.min(caret.offset, node.text.length));
   const lineStart = node.text.lastIndexOf('\n', offset - 1) + 1;
 
-  return normalize({
+  const result = normalize({
     nodes: [
       ...doc.nodes.slice(0, at),
-      { kind: 'text', text: node.text.slice(0, lineStart) },
-      chipNode,
-      { kind: 'text', text: node.text.slice(offset) },
+      { kind: node.kind, text: node.text.slice(0, lineStart) },
+      tintNode,
+      { kind: node.kind, text: node.text.slice(offset) },
       ...doc.nodes.slice(at + 1),
     ],
   });
-}
 
-/** Replace a chip's body — the popup's session-only `Save` (this prompt only,
- *  nothing written to the library). Marks the chip `dirty` by default: this is
- *  precisely the transform that diverges a chip from its saved file, so the one
- *  real caller wants `dirty: true` — a caller with a different need can pass
- *  `false` explicitly rather than the function guessing wrong for everyone. */
-export function replaceChipContent(doc: Doc, cid: string, content: string, dirty = true): Doc {
-  return normalize({
-    nodes: doc.nodes.map((n) => (n.kind === 'chip' && n.cid === cid ? { ...n, content, dirty } : n)),
-  });
-}
-
-/** Retarget a chip at a different snippet — the popup's Update, which writes
- *  the file (same name updates it, a new name creates one). The chip now
- *  reflects the snippet it actually is, and — having just been written to disk
- *  — is no longer diverged from it: Update always clears `dirty`. */
-export function retargetChip(doc: Doc, cid: string, name: string, content: string): Doc {
-  return normalize({
-    nodes: doc.nodes.map((n) =>
-      n.kind === 'chip' && n.cid === cid ? { ...n, name, content, dirty: false } : n
-    ),
-  });
-}
-
-/**
- * Dissolve a chip into plain typed text, keeping its body.
- *
- * This is what the popup's `Delete` does to the chip it was opened from: the file
- * is removed from the library, and the words stay in the prompt. Deleting a library
- * entry must not silently mutilate the prompt someone is in the middle of writing —
- * the link is gone; the writing is theirs. It also leaves no chip pointing at a
- * snippet that no longer exists.
- *
- * (Removing a chip *from the prompt* needs no transform: it is an atom, so
- * Backspace already does exactly that.)
- */
-export function dissolveChip(doc: Doc, cid: string): Doc {
-  return normalize({
-    nodes: doc.nodes.map(
-      (n): Node => (n.kind === 'chip' && n.cid === cid ? { kind: 'text', text: n.content } : n)
-    ),
-  });
+  const prefixLen = flatten({ nodes: doc.nodes.slice(0, at) }).length + lineStart;
+  return { doc: result, caret: caretAtGlobalOffset(result, prefixLen + text.length) };
 }
 
 // ── the contenteditable seam ─────────────────────────────────────────────────
-// The box renders these and reads them back. Keeping both directions as pure
-// functions over plain data — rather than letting the component walk the DOM
+// The box renders these nodes and reads them back. Keeping both directions as
+// pure functions over plain data — rather than letting the component walk the DOM
 // straight into state — is what makes the round-trip testable:
 //
-//     doc → toRenderNodes → (DOM) → fromRawNodes → doc
+//     doc → (render) → DOM → readRawNodes → fromRawNodes → doc
 //
 // must be the identity. If it is not, a user's prompt silently corrupts into
 // something that still LOOKS plausible in the box and copies out wrong.
 
-/** What the box renders for one node. A chip shows its name and its variables —
- *  never its body. The founder's reasoning: "I rarely read it. If I want to read
- *  it, it means I want to edit it. And if I want to edit it, I'd click into it."
- *  Body text in the box is clutter serving no reader. */
-export type RenderNode =
-  | { kind: 'text'; text: string }
-  | { kind: 'chip'; cid: string; name: string; vars: string[]; dirty: boolean };
-
-export function toRenderNodes(doc: Doc): RenderNode[] {
-  return doc.nodes.map((n) =>
-    n.kind === 'text'
-      ? { kind: 'text' as const, text: n.text }
-      : {
-          kind: 'chip' as const,
-          cid: n.cid,
-          name: n.name,
-          vars: chipVariables(n),
-          dirty: n.dirty === true,
-        }
-  );
-}
-
-/** One child of the contenteditable, read back off the DOM: either a chip element
- *  (identified by its `data-cid`) or a run of text. */
+/** One child of the contenteditable, read back off the DOM: a run of text, and
+ *  whether it sat inside a tint span (`tint: true`). */
 export interface RawNode {
-  /** The element's data-cid, or null for a plain text run. */
-  cid: string | null;
+  tint: boolean;
   text: string;
 }
 
-/** Zero-width space. The renderer pads around chips with one so the browser always
- *  has somewhere to put a caret — a chip at the very start or end of the box, or two
- *  adjacent chips, otherwise leave nowhere to click. It is display scaffolding, never
- *  content: stripped on the way back in, so it can never reach a copied prompt. */
-export const ZWSP = '​';
-
 /**
- * Rebuild the Doc from what the DOM now holds, carrying each surviving chip's body
- * across by `cid`.
+ * Rebuild the Doc from what the DOM now holds.
  *
- * Reading the DOM back wholesale — rather than intercepting each edit and patching
- * the model — is what makes this robust. Typing, paste, cut, drag, undo, IME
- * composition and every other inputType all arrive here as "the box now contains
- * this", with no per-event transition table to get wrong. The browser gives chips
- * atomicity for free (they are contenteditable="false"), so a chip either survives
- * an edit intact or is gone entirely.
- *
- * A chip whose `cid` is unknown to `prev` is DROPPED, not coerced into text: its body
- * lives only in the model, so there is nothing faithful to put in its place, and
- * rendering its label instead would silently substitute the words "code_review" for
- * the code-review prompt itself. (In practice this only arises if a chip element is
- * pasted in from outside the box.)
+ * Reading the DOM back wholesale — rather than intercepting each edit and
+ * patching the model — is what makes this robust. Typing, paste, cut, drag, undo
+ * and IME composition all arrive as "the box now contains this", with no
+ * per-inputType transition table to get wrong. A run's `tint` flag comes straight
+ * from whether the browser kept it inside a `.tint` span, so provenance follows
+ * the text through every edit for free; the text itself is always preserved,
+ * which is the invariant that matters (a mis-tinted run is a cosmetic drift, a
+ * lost run is data loss).
  */
-export function fromRawNodes(raw: RawNode[], prev: Doc): Doc {
-  const byCid = new Map(
-    prev.nodes.filter((n): n is ChipNode => n.kind === 'chip').map((n) => [n.cid, n])
-  );
-
-  const nodes: Node[] = [];
-  for (const r of raw) {
-    if (r.cid === null) {
-      nodes.push({ kind: 'text', text: r.text.replaceAll(ZWSP, '') });
-      continue;
-    }
-    const chip = byCid.get(r.cid);
-    if (chip) nodes.push({ ...chip });
-    // Unknown cid → dropped (see doc comment).
-  }
-  // normalize() re-issues a duplicate cid — that is how a copy/pasted chip becomes
-  // its own instance rather than a shared one.
-  return normalize({ nodes });
+export function fromRawNodes(raw: RawNode[]): Doc {
+  return normalize({
+    nodes: raw.map((r): Node => ({ kind: r.tint ? 'tint' : 'text', text: r.text })),
+  });
 }
 
 /**
- * The live-match query for a caret: what you are typing right now — the current line
- * of the caret's text node, up to the caret. Tail-capped so one very long line cannot
- * swamp the matcher.
- *
- * A chip ends the query by construction (it is a different node), which is the
- * behavior we want: having just inserted a snippet, you are not still querying for
- * one.
+ * The live-match query for a caret: what you are typing right now — the current
+ * line of the caret's text, up to the caret. Tail-capped so one very long line
+ * cannot swamp the matcher.
  */
 export function caretQuery(text: string, offset: number, cap = 120): string {
   const upto = text.slice(0, Math.max(0, Math.min(offset, text.length)));

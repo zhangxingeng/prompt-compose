@@ -1,49 +1,26 @@
 <script lang="ts">
   /**
-   * The compose surface. A contenteditable box holding two kinds of thing: free
-   * text, which you edit exactly as you would in any text box, and chips, which
-   * you cannot edit here at all.
-   *
-   * A chip is an inserted snippet. It shows its NAME and the variables it
-   * contains — never its body. The founder's reasoning: "I rarely read it. If I
-   * want to read it, it means I want to edit it. And if I want to edit it, I'd
-   * click into it." Body text in the box is clutter serving no reader.
-   *
-   * Clicking a chip opens the popup. Always, no exceptions — that is the one rule
-   * this surface is built on, and its value is that it makes the interaction
-   * predictable: the user never has to ask "do I edit this here, or click
-   * something?" The answer is always "click the chip."
-   *
-   * The mechanism is `contenteditable="false"` on the chip element, which is why
-   * the rule holds structurally rather than by guarding. The browser itself
-   * refuses to put a caret inside a chip, treats it as one atom for arrow keys and
-   * selection, and deletes it whole on Backspace. There is no inline edit to
-   * intercept, because there is no inline edit.
+   * The compose surface. A contenteditable box holding ordinary editable text.
+   * Some of that text is TINTED — it was inserted from the library as a snippet
+   * body — but a tinted run is not special: it is the same editable text with a
+   * highlight marking its template provenance. There is no atom, no chip, no
+   * popup, and no link back to the library file. Once inserted, the text is just
+   * text; editing it writes nothing to disk.
    *
    * ── Why the DOM is read back wholesale ──────────────────────────────────────
    * Every user edit lands in `syncFromDom`: we read what the box now contains and
-   * rebuild the Doc from it, carrying each surviving chip's body across by `cid`.
-   * Typing, paste, cut, drag, undo and IME composition all arrive the same way, so
-   * there is no per-inputType transition table to get wrong. The reverse direction
-   * (`render`) runs ONLY for changes made from outside the box — an insert, a popup
-   * save — because repainting under the user's own keystrokes would destroy their
-   * caret.
+   * rebuild the Doc from it, carrying each run's tint flag across by whether the
+   * browser kept it inside a `.tint` span. Typing, paste, cut, drag, undo and IME
+   * composition all arrive the same way, so there is no per-inputType transition
+   * table to get wrong. The reverse direction (`render`) runs ONLY for changes
+   * made from outside the box — an insert — because repainting under the user's
+   * own keystrokes would destroy their caret.
    */
   import { onMount, tick, untrack } from 'svelte';
   import { prompts, composeSetDoc, composeSetCaret, clearPendingCaret } from '$lib/prompts.svelte';
-  import {
-    toRenderNodes,
-    chipAt,
-    ZWSP,
-    type Caret,
-    type RawNode,
-    type RenderNode,
-  } from '$lib/compose/doc';
-  import { copyText } from '$lib/compose/variables';
+  import { type Caret, type RawNode } from '$lib/compose/doc';
 
   interface Props {
-    /** Clicking a chip — the one and only way to edit a snippet. */
-    onOpenChip: (cid: string) => void;
     /** Copy Prompt — the parent owns the clipboard call + toast. */
     onCopy: () => void;
     /** ↓ at the very end steps into the match panel; returns whether the panel had
@@ -51,74 +28,11 @@
     onStepIntoPanel: () => boolean;
   }
 
-  let { onOpenChip, onCopy, onStepIntoPanel }: Props = $props();
+  let { onCopy, onStepIntoPanel }: Props = $props();
 
   let boxEl: HTMLDivElement | undefined = $state(undefined);
 
   const hasContent = $derived(prompts.doc.nodes.length > 0);
-
-  /**
-   * The selected text, with any chip inside it contributing its BODY.
-   *
-   * The DOM carries a chip's label, so a naive `getSelection().toString()` would
-   * save the literal words "rust/code_review" as a snippet instead of the
-   * code-review prompt itself — silently storing the name in place of the thing.
-   * Chips are atomic to the browser's selection model, so each is either wholly in
-   * the range or wholly out; there is no half-chip to reason about.
-   */
-  function selectionText(): string {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !boxEl) return '';
-    const range = sel.getRangeAt(0);
-    if (!boxEl.contains(range.commonAncestorContainer)) return '';
-
-    let out = '';
-    const walk = (node: globalThis.Node): void => {
-      if (node.nodeType === globalThis.Node.TEXT_NODE) {
-        out += node.nodeValue ?? '';
-        return;
-      }
-      if (!(node instanceof HTMLElement)) return;
-      const cid = node.dataset.cid;
-      if (cid) {
-        out += chipAt(prompts.doc, cid)?.content ?? '';
-        return;
-      }
-      for (const child of Array.from(node.childNodes)) walk(child);
-    };
-    for (const child of Array.from(range.cloneContents().childNodes)) walk(child);
-    return out.replaceAll(ZWSP, '');
-  }
-
-  /**
-   * A native copy from inside the box — `oncopy` — must not hand out the DOM's
-   * rendered text, for the same reason `selectionText()` exists: a chip's DOM
-   * text is its LABEL, so a naive copy would paste the literal words
-   * `rust/code_review` instead of the code-review prompt.
-   *
-   * This supersedes round 1's selection-aware Ctrl+C rule (`nativeSelectionActive`
-   * in PromptsView.svelte) ONLY inside the box: that rule still stands for not
-   * hijacking a copy out of a variable-fill input, which lives outside this
-   * element entirely. Inside the box, a selection copy is now ours to answer,
-   * because the rendered text is wrong here.
-   *
-   * Select-all + copy must produce exactly what the Copy button produces —
-   * `selectionText()` over the full box already flattens to the same string as
-   * `flatten(prompts.doc)`, so running it through the same `copyText` pipeline
-   * makes that fall out for free, with no separate "is this everything?" branch.
-   *
-   * A PARTIAL selection is an open question in the contract, left to feel:
-   * this resolves variables through the same pipeline as the Copy button
-   * (chips flattened, `{var}` tokens hoisted) rather than leaving `{var}`
-   * literal, on the theory that "copy from the box" should mean one thing.
-   */
-  function handleCopyEvent(e: ClipboardEvent): void {
-    const text = selectionText();
-    if (!text) return; // nothing selected — let the no-op default proceed
-    e.preventDefault();
-    e.clipboardData?.setData('text/plain', copyText(text, prompts.fills));
-  }
-
 
   /** Esc out of the match panel puts the caret back in the box. */
   export function focus(): void {
@@ -127,123 +41,78 @@
 
   // ── render: model → DOM (external changes only) ─────────────────────────────
 
-  /** One chip element. Built programmatically because Svelte must not own the
-   *  children of a contenteditable — it would repaint them under the caret. They
-   *  therefore carry no scoping class, and the styles below reach them with
-   *  :global from the scoped box. */
-  function chipElement(n: Extract<RenderNode, { kind: 'chip' }>): HTMLElement {
+  /** One tinted run. Built programmatically because Svelte must not own the
+   *  children of a contenteditable — it would repaint them under the caret. The
+   *  span carries no scoping class of Svelte's, so the styles below reach it with
+   *  :global from the scoped box. The run stays editable (contenteditable is
+   *  inherited true), so the caret moves through it like any other text. */
+  function tintElement(text: string): HTMLElement {
     const el = document.createElement('span');
-    el.className = 'chip';
-    el.contentEditable = 'false';
-    el.dataset.cid = n.cid;
-    el.setAttribute('role', 'button');
-    el.setAttribute('tabindex', '0');
-    el.title = n.dirty ? `Edit ${n.name} (draft — edited this session, not saved)` : `Edit ${n.name}`;
-
-    const name = document.createElement('span');
-    name.className = 'chip__name';
-    name.textContent = n.name;
-    el.append(name);
-
-    // Diverged from the saved file via a session-only Save, never written to
-    // disk (contract §5/Clarifications). Restrained on purpose, like
-    // .chip__var — visible, not loud.
-    if (n.dirty) {
-      const dirty = document.createElement('span');
-      dirty.className = 'chip__dirty';
-      dirty.setAttribute('aria-label', 'Draft: edited this session, not saved to the library');
-      el.append(dirty);
-    }
-
-    for (const v of n.vars) {
-      const badge = document.createElement('span');
-      badge.className = 'chip__var';
-      badge.textContent = v;
-      el.append(badge);
-    }
-
-    // Hover reveals the chip's full body — same rule as the library panel. A
-    // chip stays a name at rest; hovering shows what it will actually
-    // contribute. CSS-only (:hover toggles display) so no extra reactive state
-    // is needed for something this is not: the body is baked in at render
-    // time, which is exactly when it can change (an external insert or a
-    // popup save — the only two things that touch a chip's content).
-    const body = chipAt(prompts.doc, n.cid)?.content ?? '';
-    if (body) {
-      const preview = document.createElement('span');
-      preview.className = 'chip__preview';
-      preview.textContent = body;
-      el.append(preview);
-    }
-
+    el.className = 'tint';
+    el.textContent = text;
     return el;
   }
 
-  /**
-   * Paint the box from the Doc.
-   *
-   * A text node is guaranteed before the first chip, after the last, and between
-   * any two adjacent chips — filled with a zero-width space where the model has no
-   * text. Without it the browser has nowhere to put a caret, and a chip at the very
-   * start or end of the box (or a pair of neighbours) becomes impossible to type
-   * around. The ZWSP is display scaffolding: `fromRawNodes` strips it, so it can
-   * never reach a copied prompt.
-   */
+  /** Paint the box from the Doc. One DOM child per model node, in order, so a
+   *  model node index equals its DOM child index right after a render — which is
+   *  what makes `placeCaret` below a straight index lookup. */
   function render(): void {
     if (!boxEl) return;
-    const rendered = toRenderNodes(prompts.doc);
-    if (rendered.length === 0) {
-      boxEl.replaceChildren(); // truly empty, so :empty shows the placeholder
-      return;
-    }
-
-    const children: globalThis.Node[] = [];
-    let needsFiller = true; // a leading chip needs a text node before it
-    for (const n of rendered) {
-      if (n.kind === 'text') {
-        children.push(document.createTextNode(n.text));
-        needsFiller = false;
-        continue;
-      }
-      if (needsFiller) children.push(document.createTextNode(ZWSP));
-      children.push(chipElement(n));
-      needsFiller = true;
-    }
-    if (needsFiller) children.push(document.createTextNode(ZWSP));
-
-    boxEl.replaceChildren(...children);
+    const children: globalThis.Node[] = prompts.doc.nodes.map((n) =>
+      n.kind === 'text' ? document.createTextNode(n.text) : tintElement(n.text)
+    );
+    boxEl.replaceChildren(...children); // empty → :empty shows the placeholder
   }
 
-  /** Repaint only when the doc changed from OUTSIDE the box (an insert, a popup
-   *  save, a delete). `renderNonce` is bumped by exactly those paths — reacting to
-   *  `doc` itself would repaint on every keystroke and take the caret with it.
+  /** Repaint only when the doc changed from OUTSIDE the box (an insert).
+   *  `renderNonce` is bumped by exactly that path — reacting to `doc` itself would
+   *  repaint on every keystroke and take the caret with it.
    *
-   *  `render()` reads `prompts.doc` (via `toRenderNodes` and `chipAt`), and a
-   *  Svelte 5 `$effect` tracks every reactive read that happens synchronously
-   *  during its run, not just the ones named above the call — so without
-   *  `untrack`, this effect ALSO reran on every `prompts.doc` write, i.e. every
-   *  keystroke (`syncFromDom` → `composeSetDoc`), repainting the box and
-   *  yanking the caret to wherever the browser guessed. That's what caused
-   *  typing to appear to jump to the start of the box. */
+   *  `render()` reads `prompts.doc`, and a Svelte 5 `$effect` tracks every
+   *  reactive read that happens synchronously during its run — so without
+   *  `untrack`, this effect would ALSO rerun on every `prompts.doc` write (every
+   *  keystroke via `syncFromDom`), repainting the box and yanking the caret. */
   $effect(() => {
     void prompts.renderNonce;
     untrack(render);
     void tick().then(placeCaretAfterInsert);
   });
 
-  /** After an external insert the caret belongs just after the new chip, so the
-   *  user's next keystroke continues the sentence instead of landing wherever the
-   *  browser guessed. */
+  /** After an external insert the caret belongs just past the inserted text, so
+   *  the user's next keystroke continues the sentence. The store hands us a model
+   *  Caret; because render just painted the box 1:1 from the model, the caret's
+   *  node index is a direct DOM child index. */
   function placeCaretAfterInsert(): void {
-    const cid = prompts.pendingCaretCid;
-    if (!cid || !boxEl) return;
-    const chip = boxEl.querySelector(`[data-cid="${CSS.escape(cid)}"]`);
-    const after = chip?.nextSibling;
-    if (after && after.nodeType === globalThis.Node.TEXT_NODE) {
-      const text = after.nodeValue ?? '';
-      setCaret(after, text.startsWith(ZWSP) ? 1 : 0); // land past the filler
-    }
+    const caret = prompts.pendingCaret;
+    if (!caret || !boxEl) return;
+    placeCaret(caret);
     clearPendingCaret();
+  }
+
+  function placeCaret(caret: Caret): void {
+    if (!boxEl) return;
+    const child = boxEl.childNodes[caret.node];
+    if (!child) {
+      setCaretAtBoxIndex(boxEl.childNodes.length);
+      return;
+    }
+    if (child.nodeType === globalThis.Node.TEXT_NODE) {
+      const len = (child.nodeValue ?? '').length;
+      setCaret(child, Math.min(caret.offset, len));
+      return;
+    }
+    // A tint span. Land the caret INSIDE it, unless we're at its trailing edge —
+    // there, drop the caret at box level just AFTER the span, so the next
+    // keystroke starts a fresh (untinted) text node instead of extending the
+    // tint. This is what keeps a snippet's tint from bleeding onto the words the
+    // user types after it.
+    const textChild = child.firstChild;
+    const len = textChild ? (textChild.nodeValue ?? '').length : 0;
+    if (textChild && caret.offset < len) {
+      setCaret(textChild, caret.offset);
+    } else {
+      setCaretAtBoxIndex(caret.node + 1);
+    }
   }
 
   function setCaret(node: globalThis.Node, offset: number): void {
@@ -256,53 +125,59 @@
     boxEl?.focus();
   }
 
+  /** A collapsed caret at box level, before the child at `index` (or at the end
+   *  when `index` is the child count). */
+  function setCaretAtBoxIndex(index: number): void {
+    if (!boxEl) return;
+    const range = document.createRange();
+    range.setStart(boxEl, Math.min(index, boxEl.childNodes.length));
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    boxEl.focus();
+  }
+
   // ── read back: DOM → model (every user edit) ────────────────────────────────
 
-  /** Flatten the box's children into raw nodes. Chips are recognized by their
-   *  `data-cid`; their rendered text is ignored, because the body lives in the
-   *  model keyed by that cid. */
+  /** Flatten the box's children into raw runs. A run's `tint` flag is whether it
+   *  sat inside a `.tint` span; the browser keeps that class through edits and
+   *  splits, so provenance follows the text for free. */
   function readRawNodes(): RawNode[] {
     const raw: RawNode[] = [];
     if (!boxEl) return raw;
 
-    const collect = (node: ChildNode, isLastChild: boolean): void => {
+    const collect = (node: ChildNode, isLastChild: boolean, tinted: boolean): void => {
       if (node.nodeType === globalThis.Node.TEXT_NODE) {
-        raw.push({ cid: null, text: node.nodeValue ?? '' });
+        raw.push({ tint: tinted, text: node.nodeValue ?? '' });
         return;
       }
       if (!(node instanceof HTMLElement)) return;
-
-      const cid = node.dataset.cid;
-      if (cid) {
-        raw.push({ cid, text: node.textContent ?? '' });
-        return;
-      }
       if (node.tagName === 'BR') {
         // Browsers append a filler <br> to keep the last line clickable. It is not
         // a newline the user typed, and counting it would grow the prompt by a
         // blank line on every render.
-        if (!isLastChild) raw.push({ cid: null, text: '\n' });
+        if (!isLastChild) raw.push({ tint: tinted, text: '\n' });
         return;
       }
-      // A wrapper we did not create. Enter and paste are both intercepted below so
-      // this is rare — but recurse rather than take textContent, or a chip caught
-      // inside it would lose its cid and take the user's snippet down with it.
+      // A `.tint` span tints everything inside it; any other wrapper (a div from
+      // Enter, a formatting span the browser split off) inherits the tint context
+      // it sits in. Recurse rather than take textContent so nested structure is
+      // preserved run by run.
+      const isTint = tinted || node.classList.contains('tint');
       const kids = Array.from(node.childNodes);
-      kids.forEach((k, i) => collect(k, i === kids.length - 1));
+      kids.forEach((k, i) => collect(k, i === kids.length - 1, isTint));
     };
 
     const children = Array.from(boxEl.childNodes);
-    children.forEach((c, i) => collect(c, i === children.length - 1));
+    children.forEach((c, i) => collect(c, i === children.length - 1, false));
     return raw;
   }
 
   /**
    * Where the caret is in MODEL terms, plus the text of the node it sits in (the
-   * live-match query reads that).
-   *
-   * A caret in a pure-filler text node maps to no model text node, so it reports as
-   * an insertion point before the next model node — which is exactly right: the gap
-   * between two adjacent chips is a real place to stand, and a real place to insert.
+   * live-match query reads that). The box is a flat run of text nodes and tint
+   * spans, so the caret's model node index is the count of runs before it.
    */
   function caretFromDom(): { caret: Caret; text: string } | null {
     const sel = window.getSelection();
@@ -310,29 +185,35 @@
     if (!boxEl.contains(sel.anchorNode)) return null;
 
     const anchor = sel.anchorNode;
-    const children = Array.from(boxEl.childNodes);
 
-    // The caret can resolve onto the box itself, with offset = a child index.
+    // The caret resolved onto the box itself, with offset = a child index.
     if (anchor === boxEl) {
-      const before = children.slice(0, sel.anchorOffset).filter(isModelNode).length;
+      const before = Array.from(boxEl.childNodes)
+        .slice(0, sel.anchorOffset)
+        .filter(isModelNode).length;
       return { caret: { node: before, offset: 0 }, text: '' };
     }
 
+    // Walk the flat children, counting model runs, to find the anchor.
     let index = 0;
-    for (const child of children) {
+    for (const child of Array.from(boxEl.childNodes)) {
       if (child.nodeType === globalThis.Node.TEXT_NODE) {
-        const rawText = child.nodeValue ?? '';
-        const stripped = rawText.replaceAll(ZWSP, '');
         if (child === anchor) {
-          const offset = rawText.slice(0, sel.anchorOffset).replaceAll(ZWSP, '').length;
-          return { caret: { node: index, offset }, text: stripped };
+          return { caret: { node: index, offset: sel.anchorOffset }, text: child.nodeValue ?? '' };
         }
-        if (stripped) index++; // a pure filler is not a model node
+        if ((child.nodeValue ?? '') !== '') index++;
         continue;
       }
-      if (child instanceof HTMLElement && child.dataset.cid) {
-        if (child === anchor || child.contains(anchor)) {
-          return { caret: { node: index, offset: 0 }, text: '' };
+      if (child instanceof HTMLElement && child.classList.contains('tint')) {
+        const textChild = child.firstChild;
+        if (child === anchor) {
+          // Anchor on the span element itself — offset is a child index; treat
+          // the whole span's text as the caret's text node.
+          const text = textChild?.nodeValue ?? '';
+          return { caret: { node: index, offset: sel.anchorOffset ? text.length : 0 }, text };
+        }
+        if (textChild === anchor) {
+          return { caret: { node: index, offset: sel.anchorOffset }, text: textChild.nodeValue ?? '' };
         }
         index++;
       }
@@ -341,10 +222,8 @@
   }
 
   function isModelNode(node: ChildNode): boolean {
-    if (node.nodeType === globalThis.Node.TEXT_NODE) {
-      return (node.nodeValue ?? '').replaceAll(ZWSP, '') !== '';
-    }
-    return node instanceof HTMLElement && !!node.dataset.cid;
+    if (node.nodeType === globalThis.Node.TEXT_NODE) return (node.nodeValue ?? '') !== '';
+    return node instanceof HTMLElement && node.classList.contains('tint');
   }
 
   /** One user edit: rebuild the model from the box, then re-read the caret. This
@@ -387,43 +266,16 @@
     const range = document.createRange();
     range.selectNodeContents(boxEl);
     range.setStart(sel.anchorNode, sel.anchorOffset);
-    // Only ZWSP scaffolding may lie between the caret and the end.
-    return range.toString().replaceAll(ZWSP, '') === '';
+    return range.toString() === '';
   }
 
   function handlePaste(e: ClipboardEvent): void {
-    // Plain text only. Pasted markup would arrive as elements we did not create,
-    // and a chip pasted from another app would carry a data-cid we have no body
-    // for. execCommand keeps the browser's own undo stack intact.
+    // Plain text only. Pasted markup would arrive as elements we did not create;
+    // flattening it to text keeps the box a single editable run. execCommand keeps
+    // the browser's own undo stack intact.
     e.preventDefault();
     const text = e.clipboardData?.getData('text/plain') ?? '';
     if (text) document.execCommand('insertText', false, text);
-  }
-
-  /** A chip is a button that happens to live inside a text box. */
-  function chipCidFrom(target: EventTarget | null): string | undefined {
-    const el = target instanceof HTMLElement ? target.closest('[data-cid]') : null;
-    return el instanceof HTMLElement ? el.dataset.cid : undefined;
-  }
-
-  function handleClick(e: MouseEvent): void {
-    const cid = chipCidFrom(e.target);
-    if (!cid) return;
-    e.preventDefault();
-    onOpenChip(cid);
-  }
-
-  function handleBoxKeydown(e: KeyboardEvent): void {
-    // Enter / Space on a focused chip opens the popup, and must not also type.
-    if (e.key === 'Enter' || e.key === ' ') {
-      const cid = chipCidFrom(e.target);
-      if (cid) {
-        e.preventDefault();
-        onOpenChip(cid);
-        return;
-      }
-    }
-    handleKeydown(e);
   }
 
   onMount(() => {
@@ -452,10 +304,8 @@
       data-placeholder="Compose your prompt…"
       spellcheck="false"
       oninput={syncFromDom}
-      onkeydown={handleBoxKeydown}
+      onkeydown={handleKeydown}
       onpaste={handlePaste}
-      onclick={handleClick}
-      oncopy={handleCopyEvent}
     ></div>
 
     {#if hasContent}
@@ -471,7 +321,6 @@
         ⧉
       </button>
     {/if}
-
   </div>
 </div>
 
@@ -495,7 +344,7 @@
     flex: 1;
     font-family: var(--font-mono);
     font-size: 0.82rem;
-    line-height: 1.9; /* room for a chip to sit on a line without crowding it */
+    line-height: 1.7;
     white-space: pre-wrap;
     overflow-wrap: break-word;
     padding: 0.8rem 0.9rem 3rem;
@@ -515,94 +364,24 @@
     color: var(--text-faint);
     pointer-events: none;
   }
-  /* The text inside the box is not Svelte-owned (chips are built by hand), so the
-     selection style has to be reached globally — scoped to the box. */
+  /* The text inside the box is not Svelte-owned (tint spans are built by hand), so
+     the selection style has to be reached globally — scoped to the box. */
   .compose__box :global(::selection) {
     background: var(--highlight);
     color: var(--highlight-foreground);
   }
 
-  /* Chips are created programmatically (Svelte must not own the children of a
-     contenteditable), so they carry no scoping class and are reached with :global
-     from the scoped box. */
-  .compose__box :global(.chip) {
-    position: relative; /* anchors .chip__preview */
-    display: inline-flex;
-    flex-wrap: wrap; /* long name + many vars wrap inside the pill instead of overflowing it */
-    align-items: center;
-    gap: 0.3rem;
-    max-width: 100%;
-    margin: 0 0.1rem;
-    padding: 0.05rem 0.5rem;
-    border-radius: 1rem;
-    border: 1px solid color-mix(in srgb, var(--accent-snippet) 45%, var(--border));
-    background: color-mix(in srgb, var(--accent-snippet) 12%, transparent);
-    font-size: 0.74rem;
-    line-height: 1.5;
-    cursor: pointer;
-    user-select: none;
-  }
-  .compose__box :global(.chip:hover) {
-    background: color-mix(in srgb, var(--accent-snippet) 22%, transparent);
-  }
-  .compose__box :global(.chip:focus-visible) {
-    outline: 2px solid var(--accent-snippet);
-    outline-offset: 1px;
-  }
-  .compose__box :global(.chip__name) {
-    font-weight: 600;
-    overflow-wrap: break-word;
-    color: color-mix(in srgb, var(--accent-snippet) 85%, var(--text));
-  }
-  /* The variables the chip's body contains — the only thing shown besides the
-     name. Never the body. */
-  .compose__box :global(.chip__var) {
-    font-size: 0.66rem;
-    padding: 0 0.3rem;
-    border-radius: 0.7rem;
-    background: color-mix(in srgb, var(--accent-template) 18%, transparent);
-    color: color-mix(in srgb, var(--accent-template) 80%, var(--text));
-  }
-
-  /* A chip diverged from its saved file via a session-only Save — restrained on
-     purpose, like .chip__var: visible at rest, not loud. */
-  .compose__box :global(.chip__dirty) {
-    width: 0.4rem;
-    height: 0.4rem;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--accent-result-err) 70%, var(--accent-template));
-    flex-shrink: 0;
-  }
-
-  /* Hover reveals the chip's full body — same rule as the library panel. The
-     chip stays a name at rest; :hover is enough, no JS state needed for
-     something this purely visual. */
-  .compose__box :global(.chip__preview) {
-    display: none;
-    position: absolute;
-    top: calc(100% + 0.35rem);
-    left: 0;
-    z-index: 20;
-    width: max-content;
-    max-width: 24rem;
-    max-height: 16rem;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    line-height: 1.5;
-    font-weight: 400;
-    padding: 0.55rem 0.7rem;
-    border: 1px solid var(--border);
-    border-radius: 0.4rem;
-    background: var(--bg-card);
-    color: var(--text);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-    cursor: auto;
-  }
-  .compose__box :global(.chip:hover .chip__preview),
-  .compose__box :global(.chip:focus-visible .chip__preview) {
-    display: block;
+  /* An inserted snippet's body: ordinary editable text under a highlight that
+     marks its template provenance. Built programmatically (Svelte must not own the
+     children of a contenteditable), so it carries no scoping class and is reached
+     with :global from the scoped box. `box-decoration-break: clone` keeps the
+     highlight intact when a tinted run wraps across lines. */
+  .compose__box :global(.tint) {
+    background: color-mix(in srgb, var(--accent-snippet) 15%, transparent);
+    border-radius: 0.15rem;
+    padding: 0.05rem 0;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
   }
 
   /* Semi-transparent icon, top-right — the affordance every code block on the
