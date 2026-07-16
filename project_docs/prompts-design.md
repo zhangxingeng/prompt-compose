@@ -157,43 +157,37 @@ and it is the load-bearing half of the trade.
 unguessable rule, which is the worse trade. It is documented in `variables.ts` for the same reason
 it is documented here: so the next reader does not "fix" it back.
 
-## Copy output — the per-variable as-variable toggle
+## Copy output — every variable is hoisted
 
 ```ts
-copyText(text: string, fills: Record<string, string>, asVars: Record<string, boolean>): string
+copyText(text: string, fills: Record<string, string>): string
 ```
 
-Copy rendering is **frontend-only**; Rust never renders. As-variable is a **per-variable** choice
-keyed by name; a name absent from `asVars` is **ON**. ON is the default because the failure modes
-are asymmetric: hoisting a variable never breaks a prompt, while substituting unexpected data in
-place can silently bloat it. When one side of a choice can only cost you elegance and the other can
-cost you the prompt, the default takes the safe side and the user opts out per variable. The state is
-session-only, never persisted to the snippet — with the safe default already chosen for them, a
-persisted per-variable hint would earn its complexity only if turning the same variable off, session
-after session, turned out to annoy in practice.
+Copy rendering is **frontend-only**; Rust never renders. Every variable is **always hoisted** — one
+behavior, no per-variable choice. Every occurrence becomes `<prompt_var name="x"/>` in place, and one
+`<prompt_vars>` block is appended carrying each distinct variable's value once, in first-appearance
+order.
 
-A document may mix modes freely.
+```
+Review the PR for <prompt_var name="ticket"/> and summarize.
 
-- **ON** (dedup — a long value is stated once, never repeated inline): every occurrence becomes
-  `<prompt_var name="x"/>`, and one `<prompt_vars>` block is appended carrying each distinct ON
-  variable's value once, in first-appearance order.
+<prompt_vars>
+<prompt_var name="ticket">ABC-123</prompt_var>
+</prompt_vars>
+```
 
-  ```
-  Review the PR for <prompt_var name="ticket"/> and summarize.
+Hoist is the whole behavior because it is the one that never surprises: it dedups a long value to a
+single statement, and it can never break a prompt. An earlier round shipped a per-variable
+as-variable toggle whose OFF mode substituted the value inline instead — nobody flipped it, and
+substituting unexpected data in place can silently bloat a prompt where hoisting cannot. A control
+that is never used and whose alternative is strictly riskier is exactly the forgotten feature this
+redesign exists to delete, so it was cut to the single safe path.
 
-  <prompt_vars>
-  <prompt_var name="ticket">ABC-123</prompt_var>
-  </prompt_vars>
-  ```
-
-  The wrapper form `<prompt_var name="x">` is used rather than `<x>` because names may start with
-  digits or hyphens, which are invalid XML element names. Block values are **XML-escaped** (`&`
-  first, or you re-escape the entities you just produced): the wrapper exists to be parseable, and an
-  unescaped value containing `</prompt_var>` could inject phantom variables into what the reading LLM
-  sees. Names need no escaping — rule 1's name class is attribute-safe by construction.
-- **OFF** (substitute in place): every occurrence becomes the value verbatim, as plain text, and is
-  **never** XML-escaped — it is prose the model reads, not markup it parses. Escaping is a property
-  of the block, not of the prompt.
+The wrapper form `<prompt_var name="x">` is used rather than `<x>` because names may start with
+digits or hyphens, which are invalid XML element names. Block values are **XML-escaped** (`&` first,
+or you re-escape the entities you just produced): the wrapper exists to be parseable, and an
+unescaped value containing `</prompt_var>` could inject phantom variables into what the reading LLM
+sees. Names need no escaping — rule 1's name class is attribute-safe by construction.
 
 An empty fill input reads as untouched and resolves to `UNSET_VALUE` exactly as an absent one does.
 There is deliberately no way to fill a variable with the empty string: to say nothing, delete the
