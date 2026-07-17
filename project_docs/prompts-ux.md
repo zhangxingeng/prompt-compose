@@ -19,7 +19,7 @@ you add an affordance, that is the test it has to pass.
 ## Conventions — the rules every scenario inherits
 
 - **Enter accepts. Escape cancels the innermost open thing.** In the popup, Escape closes and
-  returns you to the box; in the project manager, Escape closes.
+  returns you to the box; in a project's right-click menu or the add row, Escape closes.
 - **The compose box is the one deliberate exception: Enter is a newline**, because you are writing
   prose and a multi-line prompt is the primary use. The match panel earns Enter only *after* you
   have explicitly stepped into it — see [S3](#s3-search-by-typing-arrow-in-enter-inserts).
@@ -39,7 +39,7 @@ you add an affordance, that is the test it has to pass.
 
 ## The surface at rest
 
-Top to bottom: the **project tab row** (one tab per folder, plus a `⋯` manager), then two columns —
+Top to bottom: the **project tab row** (one tab per folder, plus `+` to add one), then two columns —
 the **library panel** on the left (collapsible with `⟨`; a `⟩ Library` peek button brings it back)
 and the **compose box** on the right. The library panel's `+` button creates a snippet. Under the
 box, the **variable fill list** appears whenever the composed prompt contains variables. Two
@@ -55,18 +55,29 @@ either — every project is simply a tab. A project carries a name, a folder, an
 
 ## S1. First launch — there is no library until you point at a folder
 
-- **What you see.** No tabs. The library panel says: *No prompt folder yet. Add one with `⋯` above —
+- **What you see.** No tabs. The library panel says: *No prompt folder yet. Add one with `+` above —
   pick any directory and every `.md` file in it becomes a snippet.*
-- **What you do.** `⋯` → `+ Add a folder…` → the OS directory picker. The folder's own basename
-  becomes the project name (you already named it once when you made it); rename it later in the
-  manager if you like. **Right-clicking `+` opens a type-a-path input instead** — the escape hatch
-  for hidden folders (a repo-local `.prompt_snippets/`, say), which OS pickers refuse to show, so
-  the picker alone would make such a library impossible to add. Enter adds, Esc cancels.
+- **What you do.** `+` opens an **add row**: a focused path field, `Browse…`, and `Add`. Paste or
+  type a path and press Enter, or hit `Browse…` for the OS picker. Esc cancels. The folder's own
+  basename becomes the project name (you already named it once when you made it); rename it later
+  from the tab's right-click menu.
+- **`Browse…` fills the field — it does not add.** That is the whole design, and it is not
+  politeness: **OS directory pickers hide dotfolders**, so a library in a hidden folder (a
+  repo-local `.prompt_snippets/`, say) cannot be reached by browsing at all. Because the picker
+  only fills the field, you can browse to a visible parent and edit the path down to the hidden
+  child. The path is always on screen before anything commits, whichever route put it there.
 - **Result.** The folder is registered and becomes the active tab — you added it to work in it, so
-  the manager closes and gets out of the way. Every `*.md` under it, recursively, is now a snippet.
+  the row closes and gets out of the way. Every `*.md` under it, recursively, is now a snippet.
 
-Trying to save a snippet with no folder configured toasts *"Add a prompt folder first — ⋯ above the
-compose box."* rather than failing quietly.
+> **Why this is a row and not a gesture.** v0.1.1 put the typed path behind a *right-click* on `+`,
+> explained only in a tooltip. The founder — who asked for the feature, for his own hidden library —
+> could not find it, and reported the app still would not let him type a path. It failed this
+> document's own bar: *can a user who has read nothing guess it exists?* An escape hatch that must
+> be discovered is not an escape hatch. If you are tempted to hide the next affordance behind a
+> gesture, this is the precedent that says don't.
+
+Trying to save a snippet with no folder configured toasts *"Add a prompt folder first"* rather than
+failing quietly.
 
 ## S2. Type a prompt, copy it
 
@@ -215,21 +226,24 @@ does not need its own navigation model.
 
 ## S10. Manage folders
 
-`⋯` opens the manager: every project as a row with its **path always visible** (a name alone cannot
-tell two folders apart, and "which folder is this?" must never need a hover).
+There is no manager popover. **Adding is a direct action on `+`** (S1), and everything that acts on
+an *existing* project lives on that project's own **right-click menu** — you act on the thing you
+right-clicked, which needs no explaining.
 
-- **Add** — `+ Add a folder…`, OS directory picker; right-click `+` to type a path instead
-  (hidden folders never appear in the picker).
-- **Rename** — type in the row's name field. The path is the identity, so a rename is just that; it
-  does not switch you to that project.
+- **Rename** — the menu's name field. The path is the identity, so a rename is only a label change;
+  it does not switch you to that project.
+- **Color** — a fixed set of swatches, plus clear. Not a free color picker: the point is telling
+  libraries apart at a glance, and ten thousand choices serve that worse than six.
 - **Remove** — two-step, and the confirm label states the consequence *before* the click rather than
   leaving it to be discovered after: `Remove` → **`Forget it? (files stay)`**. It drops the path from
   the roster. **It never deletes files.** Re-adding the folder restores the project intact. Removing
   the active project falls back to another, because a roster with no selection is a state the UI has
   no way to leave.
 
-`Esc` or click-away closes. Focus is trapped inside while it is open — a product you can drive from
-the keyboard is not actually operable if `Tab` walks focus behind an open dialog.
+There is deliberately **no "change path"**: the folder *is* the project's identity. To move a
+library, remove it and add the new folder.
+
+`Esc` or click-away closes the menu.
 
 ## S11. An update is available — told once, reachable forever
 
@@ -246,7 +260,7 @@ states the network surface exactly.)
 - **Result of `Update & restart`.** The download replaces the banner with a progress bar, then the
   app relaunches into the new build. **This discards the draft in your compose box**, which is why
   the restart is never a side effect of a single click — the button says what it does before you
-  press it, the same way the project manager's `Remove` → `Forget it? (files stay)` does.
+  press it, the same way a project's `Remove` → `Forget it? (files stay)` does.
 
 **The banner tells you once; the footer always knows.** A given version raises the banner **at most
 once per install, ever**, and the version is recorded the moment the banner *renders* — not when you
@@ -287,15 +301,16 @@ thing here you might actually want to act on, and the `×` is right there.
 
 ## Popovers, focus trap, and Escape
 
-Two surfaces open over the view: the **snippet popup** (centered, modal) and the **project manager**
-(under the tab row, with a click-away backdrop). Both behave the same way, and `src/lib/attachments/focusTrap.ts`
-is the one implementation.
+Two surfaces open over the view: the **snippet popup** (centered, modal) and a project's
+**right-click menu** (at the cursor, with a click-away backdrop). Both behave the same way, and
+`src/lib/attachments/focusTrap.ts` is the one implementation.
 
 - **Focus moves in on open**, to the field you came for: the snippet popup's name field, or the
-  manager's first control.
+  menu's name field.
 - **`Tab`/`Shift+Tab` cycle within** and never escape to the page behind.
-- **`Esc` or click-away closes**, and **focus returns to whatever held it before** — the `⋯` button,
-  the `+` button, the caret in the box. You should never lose two contexts to one keypress.
+- **`Esc` or click-away closes**, and **focus returns to whatever held it before** — the tab you
+  right-clicked, the `+` button, the caret in the box. You should never lose two contexts to one
+  keypress.
 - **The view's hotkeys disarm** while either is open, so a keystroke meant for a text field can never
   fire a command.
 
@@ -306,7 +321,7 @@ operable if `Tab` silently walks focus behind an open dialog.
 
 ## Hotkey map — one command, fixed
 
-Armed on the Prompts view, disarmed while the popup or the manager owns the keyboard. `Mod` is `Ctrl`
+Armed on the Prompts view, disarmed while the popup or a project's menu owns the keyboard. `Mod` is `Ctrl`
 on Windows/Linux, `Cmd` on macOS.
 
 | Action | Key | Note |

@@ -15,15 +15,25 @@
    * the affordances nobody could guess without having read the UX contract, and
    * a handful of tabs does not need its own navigation model.
    *
-   * The `+` button opens the native folder picker directly, no intermediate
-   * popover (round 1's `ProjectManagerPopover` is gone). Right-clicking `+`
-   * instead swaps in a small type-a-path input: OS directory pickers hide
-   * dotfolders, so a library living in a hidden folder (e.g. a repo-local
-   * `.prompt_snippets/`) is impossible to ADD through the picker at all — the
-   * typed path is the only route in. Rename / change color / delete moved onto
-   * a per-tab right-click menu (`ProjectContextMenu.svelte`) — there is
-   * deliberately no "change path": to move a library, delete this project and
-   * add the new folder (the folder IS the project's identity).
+   * `+` opens an add row: a focused path field with `Browse…` beside it. The
+   * path field is the single surface, and **the path is always visible before
+   * anything commits** — `Browse…` fills the field rather than adding, so the
+   * picker's answer can be read and edited like anything you typed.
+   *
+   * That is the fix for a real failure, not a preference. OS directory pickers
+   * hide dotfolders, so a library in a hidden folder (a repo-local
+   * `.prompt_snippets/`) cannot be reached by browsing at all. v0.1.1 shipped a
+   * typed path behind a right-click on `+` — an invisible gesture explained only
+   * in a tooltip. The founder, who asked for the feature, could not find it. It
+   * failed this doc's own bar (`prompts-ux.md`): "can a user who has read
+   * nothing guess it exists?" Now nothing needs guessing, and because Browse
+   * only fills the field, you can browse to a visible parent and edit the path
+   * down to the hidden child — the picker's blindness stops being a dead end.
+   *
+   * Rename / change color / delete moved onto a per-tab right-click menu
+   * (`ProjectContextMenu.svelte`) — there is deliberately no "change path": to
+   * move a library, delete this project and add the new folder (the folder IS
+   * the project's identity).
    */
   import { isTauri } from '$lib/api';
   import type { Project } from '$lib/prompts/types';
@@ -42,13 +52,22 @@
   let busy = $state(false);
   let menu = $state<{ project: Project; x: number; y: number } | null>(null);
 
-  /** Non-null while the type-a-path input is open (the value being typed).
-   *  Opened by right-clicking `+` — the escape hatch for folders the OS picker
-   *  refuses to show (dotfolders). */
-  let typedPath = $state<string | null>(null);
+  /** Non-null while the add row is open — the path being typed, pasted, or
+   *  filled in by `Browse…`. Empty string is "open and blank", not "closed". */
+  let draftPath = $state<string | null>(null);
   let pathInputEl = $state<HTMLInputElement | null>(null);
+  let rowEl = $state<HTMLDivElement | null>(null);
+
+  // Focus the field when the row opens. Guarded on the element so this doesn't
+  // yank focus back on every keystroke.
+  let focused = false;
   $effect(() => {
-    pathInputEl?.focus();
+    if (draftPath === null) {
+      focused = false;
+    } else if (pathInputEl && !focused) {
+      focused = true;
+      pathInputEl.focus();
+    }
   });
 
   /** The OS directory picker. In browser-dev there is no OS dialog, so fall back
@@ -87,29 +106,36 @@
     }
   }
 
-  async function add(): Promise<void> {
-    await commit(await pickFolder());
+  /** `Browse…` — the picker FILLS the field; it never adds on its own. Reading
+   *  the path before committing is the whole point, and it lets you land on a
+   *  visible parent and edit down to a hidden child the picker won't show. */
+  async function browse(): Promise<void> {
+    const picked = await pickFolder();
+    if (picked !== null) draftPath = picked;
+    pathInputEl?.focus();
   }
 
-  /** Right-click on `+`: open the typed-path input instead of the picker. */
-  function openTypedPath(e: MouseEvent): void {
-    e.preventDefault(); // suppress the browser's native context menu
-    typedPath = '';
-  }
-
-  async function submitTypedPath(): Promise<void> {
-    const path = typedPath;
-    typedPath = null;
+  async function submit(): Promise<void> {
+    const path = draftPath;
+    draftPath = null;
     await commit(path);
   }
 
   function onPathKeydown(e: KeyboardEvent): void {
     if (e.key === 'Enter') {
       e.preventDefault();
-      void submitTypedPath();
+      void submit();
     } else if (e.key === 'Escape') {
-      typedPath = null;
+      draftPath = null;
     }
+  }
+
+  /** Close only when focus leaves the row entirely — a naive input blur would
+   *  slam the row shut the instant you reached for `Browse…`. */
+  function onRowFocusOut(e: FocusEvent): void {
+    const next = e.relatedTarget as Node | null;
+    if (next && rowEl?.contains(next)) return;
+    if (!draftPath?.trim()) draftPath = null;
   }
 
   function openMenu(e: MouseEvent, p: Project): void {
@@ -147,26 +173,39 @@
     </button>
   {/each}
 
-  {#if typedPath !== null}
-    <input
-      type="text"
-      class="project-tabs__path"
-      bind:this={pathInputEl}
-      bind:value={typedPath}
-      placeholder="/path/to/your/prompt/folder — Enter to add, Esc to cancel"
-      spellcheck="false"
-      onkeydown={onPathKeydown}
-      onblur={() => (typedPath = null)}
-      aria-label="Type a prompt folder path"
-    />
+  {#if draftPath !== null}
+    <div class="project-tabs__addrow" bind:this={rowEl} onfocusout={onRowFocusOut}>
+      <input
+        type="text"
+        class="project-tabs__path"
+        bind:this={pathInputEl}
+        bind:value={draftPath}
+        placeholder="Paste or type a folder path — hidden folders welcome"
+        spellcheck="false"
+        autocapitalize="off"
+        autocorrect="off"
+        onkeydown={onPathKeydown}
+        aria-label="Prompt folder path"
+      />
+      <button type="button" class="project-tabs__browse" onclick={browse} disabled={busy}>
+        Browse…
+      </button>
+      <button
+        type="button"
+        class="project-tabs__go"
+        onclick={submit}
+        disabled={busy || !draftPath.trim()}
+      >
+        Add
+      </button>
+    </div>
   {:else}
     <button
       type="button"
       class="project-tabs__add"
-      onclick={add}
-      oncontextmenu={openTypedPath}
+      onclick={() => (draftPath = '')}
       disabled={busy}
-      title="Add a prompt folder — right-click to type a path (OS pickers hide dotfolders)"
+      title="Add a prompt folder"
       aria-label="Add a prompt folder"
     >
       +
@@ -244,10 +283,16 @@
     opacity: 0.55;
     cursor: default;
   }
+  .project-tabs__addrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+  }
   .project-tabs__path {
     font-family: var(--font-mono);
     font-size: 0.72rem;
-    width: min(26rem, 60vw);
+    width: min(24rem, 50vw);
     padding: 0.28rem 0.6rem;
     border: 1px solid var(--border);
     border-radius: 1rem;
@@ -257,5 +302,29 @@
   .project-tabs__path:focus {
     outline: none;
     border-color: var(--border-strong);
+  }
+  .project-tabs__browse,
+  .project-tabs__go {
+    font-family: inherit;
+    font-size: 0.72rem;
+    padding: 0.28rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: var(--bg-subtle);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .project-tabs__go {
+    border-color: transparent;
+    background: color-mix(in srgb, var(--accent-user) 88%, transparent);
+    color: #fff;
+  }
+  .project-tabs__browse:hover:not(:disabled) {
+    border-color: var(--border-strong);
+  }
+  .project-tabs__go:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 </style>

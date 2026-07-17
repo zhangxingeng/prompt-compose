@@ -83,10 +83,13 @@ folder, never in git, never in the user's prompt repo.
 }
 ```
 
-A project folder can be any directory, hidden ones included — but prefer a **visible** name like
-`prompt_snippets/` over a dotfolder: OS directory pickers and file managers hide dotfolders, which
-makes the library both awkward to add (the typed-path route is the only way in) and easy to forget
-exists when editing snippet files by hand.
+A project folder can be any directory, hidden ones included. Adding a hidden one is a first-class
+route, not a workaround: `+` opens a path field, and `Browse…` only fills it, so a path the picker
+refuses to show can be pasted or edited in by hand (`prompts-ux.md` S1).
+
+A **visible** name like `prompt_snippets/` is still the friendlier default — file managers hide
+dotfolders too, so a hidden library is easy to forget exists when you go to edit the `.md` files by
+hand. That is a convenience argument, not a capability one.
 
 - `usage` is keyed `<project path>::<snippet name>` → last-used epoch, and is the **only** input to
   the at-rest sort order. It lives here rather than in the snippet file for the git-cleanliness
