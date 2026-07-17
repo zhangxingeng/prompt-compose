@@ -15,6 +15,11 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Self-update. The frontend drives the whole lifecycle (check, download,
+        // install) through `src/lib/updater.svelte.ts`; there is no v2 `dialog`
+        // option to hand it off to, and no Rust command surface of our own.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(prompts::state::PromptsState::new())
         .invoke_handler(tauri::generate_handler![
             prompts::state::list_projects,

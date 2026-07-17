@@ -1,8 +1,8 @@
 # Prompt Compose — Engineering Contract
 
 The *engineering* contract: storage, the Rust↔JS command surface, the variable grammar, the match
-engine, and the compose-surface model. It ages with the code — when the implementation changes,
-this doc changes with it.
+engine, the compose-surface model, and the network surface. It ages with the code — when the
+implementation changes, this doc changes with it.
 
 Its sibling is [prompts-ux.md](prompts-ux.md), the **interaction contract**: every user scenario
 and what happens back. Where this doc says what the system *is*, that one says what the user
@@ -346,6 +346,61 @@ needs `cosine ≥ 0.5` — well above `SEM_MIN_COSINE`, which is what cuts the 0
 **exempt** — the "exact never buried" invariant outranks the floor. When every hit is floored out,
 the frontend's existing "No matching snippets." empty state covers it, so the floor needs no
 frontend change.
+
+## The updater — and the whole network surface
+
+**The network surface, stated exactly: the app makes two kinds of request, both are fetches, and it
+never sends anything.** Nothing the user writes is ever transmitted. The two:
+
+1. The embedding model + ONNX Runtime artifacts (pinned URL + sha256, [above](#match-engine--lexical-always-semantic-silently)).
+2. **The update check** — `GET` of the release manifest on launch:
+   `https://github.com/zhangxingeng/prompt-compose/releases/latest/download/latest.json`.
+
+Both are optional to the app's job and both fail quietly; the app works forever offline. Say it this
+way in the README and the bundle `longDescription` too — the bare claim "fully offline" ships inside
+every installer's metadata, and once the app calls GitHub on launch it is simply false. Accuracy
+here is not cosmetic: it is the claim the product's whole trust story rests on.
+
+**Artifacts are signed, and the pubkey is a one-way door.** `plugins.updater.pubkey` in
+`tauri.conf.json` is pinned at build time into every installed copy; CI signs the artifacts with the
+matching `TAURI_SIGNING_PRIVATE_KEY`. **prompt-compose and ccdeck deliberately share one keypair.**
+Change the pubkey and every already-installed copy rejects every future update, permanently and
+silently — there is no recovery path except a manual reinstall, so treat the string as copy-only.
+`bundle.createUpdaterArtifacts` is what makes the signed artifacts and `latest.json` exist at all;
+`.github/workflows/release.yml` must carry the signing env or a release builds fine and ships
+updates nothing will accept.
+
+**The seam: the frontend owns the whole lifecycle; Rust owns none of it.** `src/lib/updater.svelte.ts`
+drives `check()` → `downloadAndInstall()` → `relaunch()` directly against the plugins. There is **no
+Rust command surface** here and no `plugins.updater.dialog` to hand off to — that option was v1; in
+v2 a custom UI around `check()` is the supported path, not a workaround. `lib.rs` registers the two
+plugins and stops there; `tauri-plugin-process` exists *only* for the post-install relaunch.
+
+Three behaviors in that module are load-bearing, and each encodes a decision:
+
+- **`check()` returns `Update | null`** — `null` means nothing newer (strictly-greater semver against
+  the running version). It is also treated as null when a non-null `Update` carries a blank or
+  missing `version`: an unconfirmed report
+  ([plugins-workspace#2998](https://github.com/tauri-apps/plugins-workspace/issues/2998)) says some
+  plugin versions can return empty data, which would render a banner advertising "v". The guard is
+  free if the report is noise.
+- **The seen-version memory is entirely ours** — the plugin has no skip/dismiss primitive.
+  `localStorage['promptcompose-update-seen']` holds one version string, read directly, following
+  `theme.ts`'s convention. **Deliberately not a Rust config file**: persisting one string that way
+  costs a module, a command, and a settings surface, and buys nothing over the browser storage the
+  app already relies on for the theme. There is no storage wrapper module and this did not justify
+  inventing one. The behavior it encodes is the interaction contract's
+  ([S11](prompts-ux.md#s11-an-update-is-available--told-once-reachable-forever)) — read it before
+  changing when the write happens, because writing it on *click* instead of on *render* silently
+  turns the feature back into a nag.
+- **A failed check is swallowed on the silent path** and only surfaced on the manual one. Failures
+  are logged, never rethrown: an update check that breaks startup is a far worse bug than a missed
+  update. Same posture as the embedding download.
+
+The launch check lives in `+layout.svelte` inside the existing `if (!isTauri()) return` guard, so the
+whole surface is inert in `pnpm dev` — browser-dev has no IPC bridge, and the convention here is a
+guard at each call site rather than one centralized wrapper. The footer's affordance
+(`+page.svelte`) gates on `isTauri()` for the same reason.
 
 ## Deliberately out (filed, not dropped)
 

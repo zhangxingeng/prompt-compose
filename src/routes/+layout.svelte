@@ -1,12 +1,21 @@
 <script lang="ts">
   import '../app.css';
   import { onMount } from 'svelte';
+  import UpdateBanner from '$lib/components/UpdateBanner.svelte';
+  import { checkForUpdates } from '$lib/updater.svelte';
   import { isTauri } from '$lib/api';
   let { children } = $props();
 
   onMount(() => {
     // Only in the packaged desktop app — skip in browser preview/dev.
     if (!isTauri()) return;
+
+    // Silent launch check: it surfaces the banner only for an update the user
+    // has never been shown, and swallows every failure. There is deliberately no
+    // "check on launch" toggle — quiet unless actionable, like the embedding
+    // model's background download. The footer's manual check is the non-silent
+    // path.
+    checkForUpdates(true);
 
     // Any plain <a href> (e.g. the footer link) would otherwise make the Tauri
     // webview itself navigate — replacing the whole SPA with no back button.
@@ -29,3 +38,4 @@
 </script>
 
 {@render children()}
+<UpdateBanner />

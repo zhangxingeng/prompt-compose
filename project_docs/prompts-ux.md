@@ -27,6 +27,10 @@ you add an affordance, that is the test it has to pass.
   Those two sentences are the whole interaction model.
 - **Toasts are transient — 5 seconds, or click to dismiss.** Nothing durable hides in one, so losing
   one costs nothing.
+- **Exactly one notice waits for you, and it is not a toast:** the update banner
+  ([S11](#s11-an-update-is-available--told-once-reachable-forever)). Anything the user must act on
+  *later* needs a surface that survives being missed, which is the one thing a toast is built not to
+  be — so it gets its own component and its own permanent channel in the footer.
 - **Nothing the app does deletes a file you did not ask it to delete.** Removing a project forgets a
   path and never touches files; the app has no in-app snippet-delete at all — a snippet is a `.md`
   file you delete yourself, in your file manager.
@@ -225,6 +229,58 @@ tell two folders apart, and "which folder is this?" must never need a hover).
 
 `Esc` or click-away closes. Focus is trapped inside while it is open — a product you can drive from
 the keyboard is not actually operable if `Tab` walks focus behind an open dialog.
+
+## S11. An update is available — told once, reachable forever
+
+The app checks GitHub for a newer signed build on launch, silently. (It is one of only two things
+the app ever fetches, and it never sends — the [engineering contract](prompts-design.md#the-updater--and-the-whole-network-surface)
+states the network surface exactly.)
+
+- **What you see.** A small banner in the **bottom-right** — *Update available — v0.2.0* — with
+  `Update & restart` and an `×`. It never steals focus, never covers the compose box, and never
+  waits for an answer. It sits clear of the toast stack (bottom-center) on purpose: two notices that
+  share coordinates stack on top of each other.
+- **What you do.** Ignore it, `×` it, or take it. All three are fine, and **all three have the same
+  consequence for this version: you are never auto-shown it again.**
+- **Result of `Update & restart`.** The download replaces the banner with a progress bar, then the
+  app relaunches into the new build. **This discards the draft in your compose box**, which is why
+  the restart is never a side effect of a single click — the button says what it does before you
+  press it, the same way the project manager's `Remove` → `Forget it? (files stay)` does.
+
+**The banner tells you once; the footer always knows.** A given version raises the banner **at most
+once per install, ever**, and the version is recorded the moment the banner *renders* — not when you
+click something. That is the whole of "it never nags", and the reasoning is the load-bearing part:
+**ignoring a notice is a decision, and it is the most common one.** Remember only explicit
+dismissals and you re-nag, on every single launch, exactly the user who already told you — by not
+clicking — that they were not interested.
+
+Recording on render would strand a user who blinked, so the **footer is the permanent quiet
+channel**. It never moves, blinks, or asks:
+
+| Footer reads | When |
+|---|---|
+| `Check for updates` | nothing pending — a manual check, which this app otherwise has no way to ask for |
+| `Update to v0.2.0` | an update is pending, whether the banner was seen, missed, or `×`'d |
+
+Clicking `Update to v0.2.0` **brings the banner back** rather than installing — see the draft above.
+
+| Trigger | Seen before? | Result |
+|---|---|---|
+| Launch (silent) | no | banner appears; recorded as seen immediately |
+| Launch (silent) | yes | nothing at all; the footer reads `Update to vX` |
+| Footer click (manual) | either | banner appears: `Checking…` → available / up to date / the error |
+| `×` | — | closes now; already recorded, so it will not be back on its own |
+
+**A manual check always surfaces the banner, even for a version you have already seen.** You asked;
+an explicit action must never be silently swallowed. Only the launch check is allowed to stay quiet.
+
+**There is no "check for updates on launch" toggle, and it would protect against nothing.** The
+launch check is silent unless it has something to say, and a version it has said once it never says
+again — so the toggle's only real job would be suppressing a nag that cannot happen. Quiet unless
+actionable is this app's tone throughout: the embedding model downloads the same way, with no toggle
+and no progress UI. The `checking` / `up to date` / error notices auto-hide after 4 seconds because
+they answer a question you just asked; `Update available` never auto-hides, because it is the one
+thing here you might actually want to act on, and the `×` is right there.
 
 ---
 
