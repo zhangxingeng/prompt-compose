@@ -3,9 +3,10 @@
  * update affordance.
  *
  * Checks GitHub Releases for a newer signed build and installs it in-app. This
- * is the only network request the app ever makes, it only ever fetches, and any
- * failure (offline, GitHub unreachable, no release yet) is swallowed on the
- * launch-time path so it can never block the app from starting.
+ * is one of the app's two network requests — the other is the optional embedding
+ * model (`src-tauri/src/prompts/embed.rs`) — and like that one it only ever
+ * fetches. Any failure (offline, GitHub unreachable, no release yet) is
+ * swallowed on the launch-time path so it can never block the app from starting.
  *
  * **The banner tells you once; the footer always knows.** A version surfaces the
  * banner at most once per install, ever — see `markSeen` below for why that is
