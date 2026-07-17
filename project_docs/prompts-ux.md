@@ -47,8 +47,9 @@ situational buttons sit inside the box, only when it has content (top-right): `C
 empties the box in one click — no confirm — and `Copy prompt`.
 
 **There is no Global tab, and its absence is the point.** A snippet lives in the folder it sits in,
-so a scope belonging to no folder cannot exist. There is also no settings gear, no project colors, no
-pins: a project is a name and a folder, and there is nothing else about it to decorate.
+so a scope belonging to no folder cannot exist. There is no settings gear and no pinned/promoted tab
+either — every project is simply a tab. A project carries a name, a folder, and an optional color
+(right-click a tab), and nothing else.
 
 ---
 
@@ -338,9 +339,15 @@ cut — so the next agent does not helpfully rebuild one:
 | **`keywords` / `tags` / `category`, and the browse-by-tag panel** | Never used, never surfaced. Search matches name + content; **subfolders replaced them**. |
 | **The embeddings UI** — enable toggle, progress bars, `Download & index` | The engine stays and now runs silently in the background. Lexical match works immediately and unconditionally, so a failed download degrades to lexical with nothing for the user to see or decide. |
 | **Hotkey rebinding, the Shortcuts section** | See above. |
-| **Notices, the auto-repair notice, the config gear popover** | All of it existed to defend a JSON schema that no longer exists. A `.md` file cannot fail to parse. |
-| **Project colors, pin/unpin** | Pure decoration on a thing that is now just a name and a path. |
+| **Notices, the auto-repair notice, the config gear popover** | All of it existed to defend a JSON schema that no longer exists. A `.md` file cannot fail to parse. The update banner (S11) is not a reversal of this: those notices narrated the app's own repair work — something the user neither caused nor could act on — whereas an update is real, actionable, and raised once and never again. If you are adding a notice, that is the test it has to pass. |
+| **Pin/unpin, the promoted tab** | A handful of tabs needs no hierarchy; every project is simply a tab. |
 | **Roving-tabindex project tabs** | Unguessable without the contract; a handful of tabs needs no navigation model. |
 
 If you are about to add one back, the question to answer first is not "would this be useful?" but
 "can a user who has read nothing guess it exists?"
+
+**One came back, and it is not on the list above: project colors.** Round 1 cut them as "nothing to
+decorate"; round 2 restored them (right-click a tab) once several projects were on screen at once and
+color turned out to be how you tell which library you are in at a glance — a signal, not decoration.
+Recorded here so the cut is not re-applied out of loyalty to a table: the test above is the whole
+rule, and colors pass it now for a reason they did not pass it then.
