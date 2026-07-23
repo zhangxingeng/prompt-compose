@@ -1,6 +1,6 @@
 {
   "name": "prompt-compose",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Prompt Compose — an offline desktop manager for Markdown prompt snippets, organized by folder-as-project.",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
