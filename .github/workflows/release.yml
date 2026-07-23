@@ -53,7 +53,8 @@ jobs:
             patchelf \
             build-essential \
             libssl-dev \
-            libxdo-dev
+            libxdo-dev \
+            libasound2-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
