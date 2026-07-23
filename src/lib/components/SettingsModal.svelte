@@ -43,8 +43,8 @@
       <span class="settings-modal__section-title">Speech-to-text model</span>
       <div class="settings-modal__model-row">
         <div class="settings-modal__model-info">
-          <span class="settings-modal__model-name">SenseVoice Small</span>
-          <span class="settings-modal__model-size">~226MB, downloaded once, runs fully offline</span>
+          <span class="settings-modal__model-name">Whisper Large-v3 Turbo</span>
+          <span class="settings-modal__model-size">~540MB, downloaded once, runs fully offline</span>
         </div>
         {#if dictate.modelReady && !dictate.modelDownloading}
           <span class="settings-modal__status settings-modal__status--ready">✓ Ready</span>

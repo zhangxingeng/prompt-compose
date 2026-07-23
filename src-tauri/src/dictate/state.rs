@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -24,12 +24,17 @@ pub struct DictateState {
     inner: Arc<DictateInner>,
 }
 
+/// How often the session loop wakes up just to check `stop_requested` — no
+/// decoding happens on this cadence anymore, so this is a cheap idle poll,
+/// not a cost driver.
+const STOP_POLL_INTERVAL_MS: u64 = 100;
+
 struct DictateInner {
     /// Set for the lifetime of one capture+decode session — guards against a
     /// second `start_dictation` racing the first.
     running: AtomicBool,
-    /// Polled by the session loop every `COMMIT_INTERVAL_MS`; set by
-    /// `stop_dictation` to end the session after one final flush.
+    /// Polled by the session loop every `STOP_POLL_INTERVAL_MS`; set by
+    /// `stop_dictation` to end the session and trigger the one decode.
     stop_requested: AtomicBool,
     /// Set for the lifetime of one `download_dictate_model` call — guards
     /// against a second click racing the first, same discipline as `running`.
@@ -79,10 +84,10 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
     tauri::async_runtime::spawn_blocking(audio::list_input_devices).await.map_err(|e| e.to_string())?
 }
 
-/// Is the SenseVoice model already on disk? Settings uses this to decide
-/// whether to show "Download" or "Ready", and the compose box uses it (via
-/// the frontend's cached copy) to decide whether Space is allowed to start a
-/// session at all.
+/// Is the Whisper large-v3-turbo model already on disk? Settings uses this to
+/// decide whether to show "Download" or "Ready", and the compose box uses it
+/// (via the frontend's cached copy) to decide whether Space is allowed to
+/// start a session at all.
 #[tauri::command]
 pub async fn dictate_model_status() -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(|| Ok(model::artifacts_present(&root()?)))
@@ -90,11 +95,11 @@ pub async fn dictate_model_status() -> Result<bool, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Download the SenseVoice model, reporting progress via `dictate:model-progress`
-/// (`{ fraction: 0.0..=1.0 }`). Explicitly user-triggered from Settings — unlike
-/// the old behavior, `start_dictation` never downloads on its own anymore, so a
-/// click on the mic never looks like it's doing nothing while ~226MB fetches
-/// silently in the background.
+/// Download the Whisper large-v3-turbo model, reporting progress via
+/// `dictate:model-progress` (`{ fraction: 0.0..=1.0 }`). Explicitly
+/// user-triggered from Settings — `start_dictation` never downloads on its
+/// own, so holding Space never looks like it's doing nothing while ~540MB
+/// fetches silently in the background.
 #[tauri::command]
 pub async fn download_dictate_model(
     app: AppHandle,
@@ -119,7 +124,7 @@ pub async fn download_dictate_model(
 /// Start one capture+decode session. Requires the model to already be on
 /// disk — downloading it is Settings' job now, not this command's, since the
 /// user just took an explicit action (held Space) and would otherwise wonder
-/// why nothing happens for as long as a ~226MB download takes. Blocks only
+/// why nothing happens for as long as a ~540MB download takes. Blocks only
 /// long enough to load the recognizer and open the input device — everything
 /// that can fail synchronously — then hands the running session off to a
 /// dedicated background thread and returns. `stop_dictation` ends it.
@@ -127,8 +132,7 @@ pub async fn download_dictate_model(
 /// `Engine` and `audio::Capture` are both `Send` (the sherpa-onnx recognizer
 /// and cpal's `Stream` are each `Send + Sync` on every backend), so setup can
 /// run on one blocking-pool thread and, once it succeeds, hand both off to a
-/// second thread that owns the indefinite decode loop — no channel needed to
-/// bridge them.
+/// second thread that owns the session — no channel needed to bridge them.
 #[tauri::command]
 pub async fn start_dictation(
     app: AppHandle,
@@ -148,8 +152,12 @@ pub async fn start_dictation(
             if !model::artifacts_present(&root) {
                 return Err(MODEL_NOT_DOWNLOADED.to_string());
             }
-            let engine =
-                engine::Engine::load(&model::model_path(&root), &model::tokens_path(&root), &language)?;
+            let engine = engine::Engine::load(
+                &model::encoder_path(&root),
+                &model::decoder_path(&root),
+                &model::tokens_path(&root),
+                &language,
+            )?;
             let capture = audio::start_capture(device_id.as_deref())?;
             Ok((engine, capture))
         })
@@ -173,80 +181,43 @@ pub async fn start_dictation(
     }
 }
 
-/// Signal the running session to stop. It flushes whatever is left in the
-/// buffer as one final commit (`dictate:final`) before tearing the capture
-/// stream down — a mid-utterance stop must not silently drop the words
-/// already spoken.
+/// Signal the running session to stop capturing and start (the one) decode.
+/// Resolves immediately — the decode itself happens on the session's
+/// background thread and its result arrives later via `dictate:final`, with
+/// `dictate:done` always following once decoding finishes (empty result or
+/// not) so the frontend knows to stop showing a "transcribing…" state.
 #[tauri::command]
 pub async fn stop_dictation(state: tauri::State<'_, DictateState>) -> Result<(), String> {
     state.inner.stop_requested.store(true, Ordering::SeqCst);
     Ok(())
 }
 
-/// The growing-buffer loop: every `COMMIT_INTERVAL_MS`, re-decode everything
-/// captured so far. A trailing stretch of silence finalizes the current
-/// buffer as committed text (`dictate:final`) and resets for the next
-/// utterance; otherwise the decode is an interim result (`dictate:partial`).
-/// Runs until `stop_requested`, then does one last decode of whatever remains
-/// so a stop mid-utterance never drops the words already spoken.
+/// One-shot capture+decode: wait for `stop_requested` (checked every
+/// `STOP_POLL_INTERVAL_MS` — a cheap idle poll, no decoding happens on this
+/// cadence), then decode the entire captured buffer exactly once and emit it
+/// as `dictate:final`. `dictate:done` always fires after, whether or not
+/// there was any text, so the frontend can clear its "transcribing" state.
 fn run_session(app: AppHandle, inner: Arc<DictateInner>, engine: engine::Engine, capture: audio::Capture) {
-    let mut last_partial = String::new();
-
     loop {
-        std::thread::sleep(Duration::from_millis(engine::COMMIT_INTERVAL_MS));
+        std::thread::sleep(Duration::from_millis(STOP_POLL_INTERVAL_MS));
         if inner.stop_requested.load(Ordering::SeqCst) {
             break;
         }
-        let Some(snapshot) = snapshot_buffer(&capture.buffer) else { continue };
-        if snapshot.is_empty() {
-            continue;
-        }
-
-        if engine::is_trailing_silence(&snapshot, engine::SILENCE_HOLD_MS, engine::SILENCE_RMS_THRESHOLD) {
-            emit_final(&app, &engine, &snapshot);
-            clear_buffer(&capture.buffer);
-            last_partial.clear();
-        } else {
-            emit_partial_if_changed(&app, &engine, &snapshot, &mut last_partial);
-        }
     }
 
-    if let Some(remaining) = snapshot_buffer(&capture.buffer) {
-        if !remaining.is_empty() {
-            emit_final(&app, &engine, &remaining);
-        }
-    }
+    let samples = capture.buffer.lock().ok().map(|buf| buf.clone()).unwrap_or_default();
     capture.stop();
+
+    if !samples.is_empty() {
+        match engine.decode_long(&samples) {
+            Ok(text) if !text.trim().is_empty() => {
+                let _ = app.emit("dictate:final", TextPayload { text });
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("[dictate] decode failed: {e}"),
+        }
+    }
+    let _ = app.emit("dictate:done", ());
+
     inner.running.store(false, Ordering::SeqCst);
-}
-
-fn snapshot_buffer(buffer: &audio::SampleBuffer) -> Option<Vec<f32>> {
-    buffer.lock().ok().map(|buf| buf.clone())
-}
-
-fn clear_buffer(buffer: &Mutex<Vec<f32>>) {
-    if let Ok(mut buf) = buffer.lock() {
-        buf.clear();
-    }
-}
-
-fn emit_final(app: &AppHandle, engine: &engine::Engine, samples: &[f32]) {
-    match engine.decode(samples) {
-        Ok(text) if !text.trim().is_empty() => {
-            let _ = app.emit("dictate:final", TextPayload { text });
-        }
-        Ok(_) => {}
-        Err(e) => eprintln!("[dictate] decode failed: {e}"),
-    }
-}
-
-fn emit_partial_if_changed(app: &AppHandle, engine: &engine::Engine, samples: &[f32], last: &mut String) {
-    match engine.decode(samples) {
-        Ok(text) if !text.trim().is_empty() && text != *last => {
-            *last = text.clone();
-            let _ = app.emit("dictate:partial", TextPayload { text });
-        }
-        Ok(_) => {}
-        Err(e) => eprintln!("[dictate] decode failed: {e}"),
-    }
 }

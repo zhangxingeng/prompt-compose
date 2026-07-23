@@ -1,10 +1,10 @@
 //! Microphone enumeration and live capture: `cpal` reads whatever native rate
 //! the device offers, downmixes to mono, and `sherpa_onnx::LinearResampler`
 //! (already a dependency of `engine.rs` — no separate resampling crate is
-//! needed) converts it to the 16kHz mono f32 SenseVoice expects. The result
-//! lands in a shared buffer the recognition loop reads from; capture and
-//! recognition run on different cadences by design; the callback only ever
-//! appends.
+//! needed) converts it to the 16kHz mono f32 Whisper expects. The result
+//! lands in a shared buffer that the session (`dictate::state`) reads once,
+//! in full, when Space is released — capture just appends for as long as
+//! Space is held.
 
 use std::sync::{Arc, Mutex};
 

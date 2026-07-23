@@ -50,7 +50,7 @@
 
   <label class="dict-pop__label" for="dict-pop-model">Model</label>
   <select id="dict-pop-model" class="dict-pop__select" disabled>
-    <option>SenseVoice Small</option>
+    <option>Whisper Large-v3 Turbo</option>
   </select>
 </div>
 

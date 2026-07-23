@@ -248,16 +248,37 @@
 
   // ── input handling ──────────────────────────────────────────────────────────
 
-  /** Space is push-to-talk while the box is focused: held down it starts
-   *  dictation, released it stops. This claims the key entirely — a literal
-   *  space can no longer be typed here via the spacebar — a deliberate trade
-   *  since this box's job is now "type OR dictate", never both in the same
-   *  keystroke. `e.repeat` guards against every OS auto-repeat keydown while
-   *  the key stays held from re-triggering the start. */
+  /** How long Space must be held before it's treated as push-to-talk rather
+   *  than a normal keystroke. Below this, releasing early just types a space
+   *  like any other key. */
+  const SPACE_HOLD_MS = 500;
+
+  /** Set only between a non-repeat Space keydown and either its matching
+   *  keyup (a quick tap) or the hold timer firing (a hold). Doubles as the
+   *  "was this a hold or a tap" flag for keyup/blur. */
+  let spaceHoldTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Space types a normal space on a quick tap, and is push-to-talk on a
+   *  hold — distinguished by a short debounce rather than by keydown itself,
+   *  since starting dictation immediately on keydown made every ordinary
+   *  space-bar press (typing a sentence) either swallowed or misread as a
+   *  dictation attempt. The keydown types the space right away so a fast tap
+   *  reads as an ordinary keystroke with no lag; if the key is still down
+   *  once `SPACE_HOLD_MS` elapses, that provisional space is the only
+   *  character that could have been typed during the hold (repeats are
+   *  ignored below), so removing exactly one character undoes it cleanly
+   *  before dictation starts. `e.repeat` guards the OS auto-repeat keydowns
+   *  that fire for as long as the physical key stays down. */
   function handleKeydown(e: KeyboardEvent): void {
     if (e.key === ' ' || e.code === 'Space') {
       e.preventDefault();
-      if (!e.repeat) void startPushToTalk();
+      if (e.repeat) return;
+      document.execCommand('insertText', false, ' ');
+      spaceHoldTimer = setTimeout(() => {
+        spaceHoldTimer = undefined;
+        document.execCommand('delete', false); // undo the provisional space
+        void startPushToTalk();
+      }, SPACE_HOLD_MS);
       return;
     }
     if (e.key === 'Enter') {
@@ -280,13 +301,27 @@
   function handleKeyup(e: KeyboardEvent): void {
     if (e.key === ' ' || e.code === 'Space') {
       e.preventDefault();
+      if (spaceHoldTimer !== undefined) {
+        // Released before the hold threshold — a normal tap. The space typed
+        // on keydown already stands as ordinary text; nothing to undo.
+        clearTimeout(spaceHoldTimer);
+        spaceHoldTimer = undefined;
+        return;
+      }
       void stopPushToTalk();
     }
   }
 
   /** Losing focus mid-hold (Alt-Tab, a click elsewhere) must not leave the mic
-   *  open forever — the keyup would never arrive at this element again. */
+   *  open forever — the keyup would never arrive at this element again. If
+   *  focus is lost before the hold threshold, treat it like a released tap
+   *  rather than a cancelled dictation attempt (dictation never started). */
   function handleBlur(): void {
+    if (spaceHoldTimer !== undefined) {
+      clearTimeout(spaceHoldTimer);
+      spaceHoldTimer = undefined;
+      return;
+    }
     void stopPushToTalk();
   }
 
@@ -375,17 +410,23 @@
       <!-- A status indicator, not a button: dictation starts/stops by holding
            Space in the box (see handleKeydown/handleKeyup) — a click-to-toggle
            mic was tried and dropped as an extra step that added nothing. This
-           just shows what's currently happening: idle, opening the mic, or
+           just shows what's currently happening: idle, opening the mic,
            recording (with a small equalizer animation standing in for a
-           waveform, kept intentionally simple). -->
+           waveform, kept intentionally simple), or transcribing the one
+           decode that runs after Space is released — no live partial text,
+           see `dictate.svelte.ts` for why. -->
       <div
         class="compose__mic"
         class:compose__mic--active={dictate.dictating}
-        title={dictate.dictating ? 'Recording — release Space to stop' : 'Hold Space in the box to dictate'}
-        aria-label={dictate.dictating ? 'Recording' : 'Not recording'}
+        title={dictate.dictating
+          ? 'Recording — release Space to stop'
+          : dictate.transcribing
+            ? 'Transcribing…'
+            : 'Hold Space in the box to dictate'}
+        aria-label={dictate.dictating ? 'Recording' : dictate.transcribing ? 'Transcribing' : 'Not recording'}
         role="status"
       >
-        {#if dictate.preparingModel}
+        {#if dictate.preparingModel || dictate.transcribing}
           <span class="compose__mic-icon">…</span>
         {:else if dictate.dictating}
           <span class="compose__mic-bars" aria-hidden="true">
@@ -408,16 +449,6 @@
         <DictatePopover onClose={() => (dictatePopoverOpen = false)} />
       {/if}
     </div>
-
-    {#if dictate.interimText}
-      <!-- Interim text lives OUTSIDE the contenteditable on purpose: the box's
-           render effect only ever repaints on an external insert, specifically
-           to avoid yanking the user's caret — a live-updating span painted into
-           the box on every ~1s partial would fight that invariant. Only a
-           finalized utterance ever touches the box, via the same safe
-           pendingCaret insert path a snippet uses. -->
-      <div class="compose__interim" aria-live="polite">{dictate.interimText}</div>
-    {/if}
   </div>
 </div>
 
@@ -562,21 +593,5 @@
   @keyframes compose-mic-bar {
     0%, 100% { transform: scaleY(0.3); }
     50% { transform: scaleY(1); }
-  }
-
-  /* The in-progress utterance — dimmed, outside the contenteditable, never
-     touching the document (see the template comment above). */
-  .compose__interim {
-    position: absolute;
-    bottom: 0.6rem;
-    left: 0.9rem;
-    right: 0.9rem;
-    font-size: 0.78rem;
-    color: var(--text-faint);
-    font-style: italic;
-    pointer-events: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 </style>

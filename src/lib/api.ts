@@ -124,8 +124,10 @@ export async function touchSnippet(project: string, name: string): Promise<void>
 
 // ---------------------------------------------------------------------------
 // Dictation — local speech-to-text (src-tauri/src/dictate/). Device, language
-// and model are the only controls; interim/final text arrives over the
-// `dictate:partial` / `dictate:final` events, not a return value.
+// and model are the only controls. One-shot: the whole utterance is decoded
+// once when `stopDictation` is called, arriving via the `dictate:final` event
+// (not a return value), with `dictate:done` always following once decoding
+// finishes so the frontend can clear a "transcribing…" state.
 // ---------------------------------------------------------------------------
 
 /** One selectable input device. `id` is opaque — round-trip it back into
@@ -143,17 +145,17 @@ export async function listAudioDevices(): Promise<AudioDevice[]> {
   return call<AudioDevice[]>('list_audio_devices');
 }
 
-/** Is the SenseVoice model already on disk? Settings uses this to decide
- *  "Download" vs "Ready"; the dictate store caches it so Space can refuse
- *  instantly instead of round-tripping to the backend on every press. */
+/** Is the Whisper large-v3-turbo model already on disk? Settings uses this to
+ *  decide "Download" vs "Ready"; the dictate store caches it so Space can
+ *  refuse instantly instead of round-tripping to the backend on every press. */
 export async function dictateModelStatus(): Promise<boolean> {
   if (!isTauri()) return false;
   return call<boolean>('dictate_model_status');
 }
 
-/** Download the SenseVoice model — a Settings-only, explicit action.
- *  Progress arrives via `onDictateModelProgress`; this resolves once the
- *  model is verified and on disk. */
+/** Download the Whisper large-v3-turbo model — a Settings-only, explicit
+ *  action. Progress arrives via `onDictateModelProgress`; this resolves once
+ *  the model is verified and on disk. */
 export async function downloadDictateModel(): Promise<void> {
   if (!isTauri()) {
     throw new Error('Model download needs the desktop app.');
@@ -184,27 +186,27 @@ export async function startDictation(deviceId: string | null, language: string):
   await call<null>('start_dictation', { deviceId, language });
 }
 
-/** Stop the running session. It flushes whatever was captured since the last
- *  commit as one final `dictate:final` before the mic actually closes. */
+/** Stop capturing and trigger the one decode. Resolves immediately — the
+ *  actual decode happens in the background and its result (if any) arrives
+ *  via `dictate:final`, with `dictate:done` always following. */
 export async function stopDictation(): Promise<void> {
   if (!isTauri()) return;
   await call<null>('stop_dictation');
 }
 
-/** Interim text for the utterance still being spoken — never touches the
- *  compose doc, just the dimmed strip near the mic button. Superseded by the
- *  next partial or by `dictate:final`, whichever comes first. */
-export async function onDictatePartial(cb: (text: string) => void): Promise<() => void> {
-  if (!isTauri()) return () => {};
-  const { listen } = await import('@tauri-apps/api/event');
-  return listen<{ text: string }>('dictate:partial', (e) => cb(e.payload.text));
-}
-
-/** One committed utterance — lands at the compose box's cursor. */
+/** The one committed utterance — lands at the compose box's cursor. */
 export async function onDictateFinal(cb: (text: string) => void): Promise<() => void> {
   if (!isTauri()) return () => {};
   const { listen } = await import('@tauri-apps/api/event');
   return listen<{ text: string }>('dictate:final', (e) => cb(e.payload.text));
+}
+
+/** Fires once decoding finishes, whether or not there was any text — the
+ *  frontend's cue to clear a "transcribing…" state. */
+export async function onDictateDone(cb: () => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen('dictate:done', () => cb());
 }
 
 // --- Browser-dev prompt store ------------------------------------------------

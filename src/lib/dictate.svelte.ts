@@ -15,19 +15,21 @@
  * before ever calling `startDictation`, so holding Space with no model on
  * disk shows an explanatory toast instead of a silent multi-minute stall.
  *
- * Interim text is store-only: it is shown in a dimmed strip near the mic
- * indicator, never written into the compose doc. Only a committed utterance
- * (`dictate:final`) ever touches the box, through the same untinted-insert
- * path `composeInsertText` gives it — repainting the box on every ~1s partial
- * would fight `ComposeBox.svelte`'s "only external inserts repaint" invariant
- * and yank the user's caret out from under them.
+ * One-shot, not live: releasing Space stops capture and triggers exactly one
+ * decode of the whole utterance (Whisper large-v3-turbo). There is no
+ * interim/partial text anymore — an earlier version redecoded the entire
+ * growing buffer every ~800ms for a live partial, which is quadratic-cost in
+ * utterance length and not how genuine streaming ASR works; it was cut
+ * rather than shipped as a patch on top of that cost (see
+ * `src-tauri/src/dictate/engine.rs`). `transcribing` covers the gap between
+ * releasing Space and the one decode finishing.
  */
 import {
   listAudioDevices,
   startDictation,
   stopDictation,
-  onDictatePartial,
   onDictateFinal,
+  onDictateDone,
   dictateModelStatus,
   downloadDictateModel,
   onDictateModelProgress,
@@ -45,15 +47,16 @@ export const dictate = $state({
    *  actually opening (engine load + device open) — no download happens
    *  here anymore, so this is short. */
   preparingModel: false,
+  /** True from releasing Space until the one decode finishes (`dictate:done`) —
+   *  can take several seconds, especially for a long utterance. */
+  transcribing: false,
   devices: [] as AudioDevice[],
   /** `null` = the system default input device. */
   selectedDevice: null as string | null,
   language: 'auto' as DictateLanguage,
-  /** The utterance still being spoken, or '' between utterances. */
-  interimText: '',
-  /** Whether the SenseVoice model is on disk. Checked once at startup and
-   *  kept current by `downloadModel` — Space refuses instantly when this is
-   *  false rather than round-tripping to the backend to find out. */
+  /** Whether the Whisper model is on disk. Checked once at startup and kept
+   *  current by `downloadModel` — Space refuses instantly when this is false
+   *  rather than round-tripping to the backend to find out. */
   modelReady: false,
   modelDownloading: false,
   /** 0..1 while `modelDownloading`; meaningless otherwise. */
@@ -67,12 +70,11 @@ let listenersReady: Promise<void> | null = null;
 function ensureListeners(): Promise<void> {
   if (!listenersReady) {
     listenersReady = (async () => {
-      await onDictatePartial((text) => {
-        dictate.interimText = text;
-      });
       await onDictateFinal((text) => {
-        dictate.interimText = '';
         composeInsertText(text);
+      });
+      await onDictateDone(() => {
+        dictate.transcribing = false;
       });
     })();
   }
@@ -153,13 +155,14 @@ export async function startPushToTalk(): Promise<void> {
  *  a no-op on the backend in that case. */
 export async function stopPushToTalk(): Promise<void> {
   if (!dictate.dictating) return;
-  // Reflect "off" immediately — the final commit (if any) still arrives via
-  // `dictate:final` once the backend flushes it.
+  // Reflect "off" immediately; "transcribing" covers the one decode still to
+  // come, which arrives via `dictate:final` (if any text) then `dictate:done`.
   dictate.dictating = false;
-  dictate.interimText = '';
+  dictate.transcribing = true;
   try {
     await stopDictation();
   } catch (e) {
+    dictate.transcribing = false;
     toasts.push(`Couldn't stop dictation cleanly: ${errText(e)}`);
   }
 }
