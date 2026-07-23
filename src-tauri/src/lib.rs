@@ -36,6 +36,8 @@ pub fn run() {
             prompts::state::match_snippets,
             prompts::state::touch_snippet,
             dictate::state::list_audio_devices,
+            dictate::state::dictate_model_status,
+            dictate::state::download_dictate_model,
             dictate::state::start_dictation,
             dictate::state::stop_dictation,
         ])

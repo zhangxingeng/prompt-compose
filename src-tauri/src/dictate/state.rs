@@ -31,6 +31,9 @@ struct DictateInner {
     /// Polled by the session loop every `COMMIT_INTERVAL_MS`; set by
     /// `stop_dictation` to end the session after one final flush.
     stop_requested: AtomicBool,
+    /// Set for the lifetime of one `download_dictate_model` call — guards
+    /// against a second click racing the first, same discipline as `running`.
+    downloading: AtomicBool,
 }
 
 impl DictateState {
@@ -39,6 +42,7 @@ impl DictateState {
             inner: Arc::new(DictateInner {
                 running: AtomicBool::new(false),
                 stop_requested: AtomicBool::new(false),
+                downloading: AtomicBool::new(false),
             }),
         }
     }
@@ -59,15 +63,66 @@ struct TextPayload {
     text: String,
 }
 
+#[derive(Serialize, Clone)]
+struct ProgressPayload {
+    fraction: f32,
+}
+
+/// The exact error `start_dictation` returns when the model hasn't been
+/// downloaded yet. The frontend matches on this string to show its "download
+/// the model in Settings first" message instead of a generic failure toast —
+/// keep the two in sync (`src/lib/dictate.svelte.ts`).
+pub const MODEL_NOT_DOWNLOADED: &str = "MODEL_NOT_DOWNLOADED";
+
 #[tauri::command]
 pub async fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
     tauri::async_runtime::spawn_blocking(audio::list_input_devices).await.map_err(|e| e.to_string())?
 }
 
-/// Start one capture+decode session. Blocks only long enough to download the
-/// model (first use only), load the recognizer, and open the input device —
-/// everything that can fail synchronously — then hands the running session
-/// off to a dedicated background thread and returns. `stop_dictation` ends it.
+/// Is the SenseVoice model already on disk? Settings uses this to decide
+/// whether to show "Download" or "Ready", and the compose box uses it (via
+/// the frontend's cached copy) to decide whether Space is allowed to start a
+/// session at all.
+#[tauri::command]
+pub async fn dictate_model_status() -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(|| Ok(model::artifacts_present(&root()?)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Download the SenseVoice model, reporting progress via `dictate:model-progress`
+/// (`{ fraction: 0.0..=1.0 }`). Explicitly user-triggered from Settings — unlike
+/// the old behavior, `start_dictation` never downloads on its own anymore, so a
+/// click on the mic never looks like it's doing nothing while ~226MB fetches
+/// silently in the background.
+#[tauri::command]
+pub async fn download_dictate_model(
+    app: AppHandle,
+    state: tauri::State<'_, DictateState>,
+) -> Result<(), String> {
+    let inner = state.inner.clone();
+    if inner.downloading.swap(true, Ordering::SeqCst) {
+        return Err("the model is already downloading".to_string());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let root = root()?;
+        model::download_artifacts(&root, |fraction| {
+            let _ = app.emit("dictate:model-progress", ProgressPayload { fraction });
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    inner.downloading.store(false, Ordering::SeqCst);
+    result
+}
+
+/// Start one capture+decode session. Requires the model to already be on
+/// disk — downloading it is Settings' job now, not this command's, since the
+/// user just took an explicit action (held Space) and would otherwise wonder
+/// why nothing happens for as long as a ~226MB download takes. Blocks only
+/// long enough to load the recognizer and open the input device — everything
+/// that can fail synchronously — then hands the running session off to a
+/// dedicated background thread and returns. `stop_dictation` ends it.
 ///
 /// `Engine` and `audio::Capture` are both `Send` (the sherpa-onnx recognizer
 /// and cpal's `Stream` are each `Send + Sync` on every backend), so setup can
@@ -90,7 +145,9 @@ pub async fn start_dictation(
     let setup: Result<(engine::Engine, audio::Capture), String> =
         tauri::async_runtime::spawn_blocking(move || {
             let root = root()?;
-            model::download_artifacts(&root)?;
+            if !model::artifacts_present(&root) {
+                return Err(MODEL_NOT_DOWNLOADED.to_string());
+            }
             let engine =
                 engine::Engine::load(&model::model_path(&root), &model::tokens_path(&root), &language)?;
             let capture = audio::start_capture(device_id.as_deref())?;

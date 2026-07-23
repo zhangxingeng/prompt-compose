@@ -24,13 +24,32 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// discards the bytes and errors — the caller never sees unverified content,
 /// which is the invariant the whole security posture rests on.
 pub fn download_verified(url: &str, expected_sha256: &str, file: &str) -> Result<Vec<u8>, String> {
+    download_verified_with_progress(url, expected_sha256, file, |_, _| {})
+}
+
+/// Same contract as `download_verified`, but reports progress as it streams:
+/// `on_progress(bytes_read_so_far, total_bytes)` — `total_bytes` is `None`
+/// when the server didn't send a `Content-Length` (the caller then shows an
+/// indeterminate state rather than a percentage).
+pub fn download_verified_with_progress(
+    url: &str,
+    expected_sha256: &str,
+    file: &str,
+    mut on_progress: impl FnMut(u64, Option<u64>),
+) -> Result<Vec<u8>, String> {
     let response = ureq::get(url).call().map_err(|e| format!("download of {file} failed: {e}"))?;
+    let total = response.body().content_length();
+    let mut reader = response.into_body().into_reader();
     let mut bytes: Vec<u8> = Vec::new();
-    response
-        .into_body()
-        .into_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("download of {file} interrupted: {e}"))?;
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut chunk).map_err(|e| format!("download of {file} interrupted: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        on_progress(bytes.len() as u64, total);
+    }
     let actual = sha256_hex(&bytes);
     if actual != expected_sha256 {
         return Err(format!(

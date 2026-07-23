@@ -143,10 +143,40 @@ export async function listAudioDevices(): Promise<AudioDevice[]> {
   return call<AudioDevice[]>('list_audio_devices');
 }
 
+/** Is the SenseVoice model already on disk? Settings uses this to decide
+ *  "Download" vs "Ready"; the dictate store caches it so Space can refuse
+ *  instantly instead of round-tripping to the backend on every press. */
+export async function dictateModelStatus(): Promise<boolean> {
+  if (!isTauri()) return false;
+  return call<boolean>('dictate_model_status');
+}
+
+/** Download the SenseVoice model — a Settings-only, explicit action.
+ *  Progress arrives via `onDictateModelProgress`; this resolves once the
+ *  model is verified and on disk. */
+export async function downloadDictateModel(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error('Model download needs the desktop app.');
+  }
+  await call<null>('download_dictate_model');
+}
+
+/** Download progress for `downloadDictateModel`, 0..1. */
+export async function onDictateModelProgress(cb: (fraction: number) => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<{ fraction: number }>('dictate:model-progress', (e) => cb(e.payload.fraction));
+}
+
+/** The exact error `start_dictation` rejects with when the model hasn't been
+ *  downloaded yet — kept in sync with `MODEL_NOT_DOWNLOADED` in
+ *  `src-tauri/src/dictate/state.rs`. */
+export const MODEL_NOT_DOWNLOADED = 'MODEL_NOT_DOWNLOADED';
+
 /** Start one capture+decode session. `deviceId` of `null` uses the system
- *  default input. `language` is `"auto" | "en" | "zh"`. Resolves once setup
- *  (model download on first use, engine load, opening the device) succeeds;
- *  a rejection is a real failure to show the user, not a routine "no result". */
+ *  default input. `language` is `"auto" | "en" | "zh"`. Requires the model to
+ *  already be downloaded (Settings' job, not this call's) — rejects with
+ *  `MODEL_NOT_DOWNLOADED` otherwise. */
 export async function startDictation(deviceId: string | null, language: string): Promise<void> {
   if (!isTauri()) {
     throw new Error('Dictation needs the desktop app — there is no microphone in browser-dev.');

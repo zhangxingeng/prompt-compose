@@ -19,7 +19,7 @@
   import { onMount, tick, untrack } from 'svelte';
   import { prompts, composeSetDoc, composeSetCaret, clearPendingCaret } from '$lib/prompts.svelte';
   import { type Caret, type RawNode } from '$lib/compose/doc';
-  import { dictate, toggleDictation } from '$lib/dictate.svelte';
+  import { dictate, startPushToTalk, stopPushToTalk, refreshModelStatus } from '$lib/dictate.svelte';
   import DictatePopover from './DictatePopover.svelte';
 
   interface Props {
@@ -248,7 +248,18 @@
 
   // ── input handling ──────────────────────────────────────────────────────────
 
+  /** Space is push-to-talk while the box is focused: held down it starts
+   *  dictation, released it stops. This claims the key entirely — a literal
+   *  space can no longer be typed here via the spacebar — a deliberate trade
+   *  since this box's job is now "type OR dictate", never both in the same
+   *  keystroke. `e.repeat` guards against every OS auto-repeat keydown while
+   *  the key stays held from re-triggering the start. */
   function handleKeydown(e: KeyboardEvent): void {
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      if (!e.repeat) void startPushToTalk();
+      return;
+    }
     if (e.key === 'Enter') {
       // Own the newline. Left to itself the browser splits the box into <div>s (or
       // drops in a <br>), and the model would have to reverse-engineer block
@@ -264,6 +275,19 @@
       // falls through to its default no-op.
       e.preventDefault();
     }
+  }
+
+  function handleKeyup(e: KeyboardEvent): void {
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      void stopPushToTalk();
+    }
+  }
+
+  /** Losing focus mid-hold (Alt-Tab, a click elsewhere) must not leave the mic
+   *  open forever — the keyup would never arrive at this element again. */
+  function handleBlur(): void {
+    void stopPushToTalk();
   }
 
   /** True when the caret sits at the very end of the box's content. */
@@ -284,6 +308,12 @@
     const text = e.clipboardData?.getData('text/plain') ?? '';
     if (text) document.execCommand('insertText', false, text);
   }
+
+  onMount(() => {
+    // So the very first Space press already knows whether the model is on
+    // disk, instead of waiting on a round trip before it can even decide.
+    void refreshModelStatus();
+  });
 
   onMount(() => {
     // selectionchange is the only reliable way to track caret moves (arrows,
@@ -312,6 +342,8 @@
       spellcheck="false"
       oninput={syncFromDom}
       onkeydown={handleKeydown}
+      onkeyup={handleKeyup}
+      onblur={handleBlur}
       onpaste={handlePaste}
     ></div>
 
@@ -340,17 +372,29 @@
           ⧉
         </button>
       {/if}
-      <button
-        type="button"
-        class="compose__iconbtn"
-        class:compose__iconbtn--active={dictate.dictating}
-        onclick={() => toggleDictation()}
-        title={dictate.dictating ? 'Stop dictation' : 'Start dictation'}
-        aria-label={dictate.dictating ? 'Stop dictation' : 'Start dictation'}
-        aria-pressed={dictate.dictating}
+      <!-- A status indicator, not a button: dictation starts/stops by holding
+           Space in the box (see handleKeydown/handleKeyup) — a click-to-toggle
+           mic was tried and dropped as an extra step that added nothing. This
+           just shows what's currently happening: idle, opening the mic, or
+           recording (with a small equalizer animation standing in for a
+           waveform, kept intentionally simple). -->
+      <div
+        class="compose__mic"
+        class:compose__mic--active={dictate.dictating}
+        title={dictate.dictating ? 'Recording — release Space to stop' : 'Hold Space in the box to dictate'}
+        aria-label={dictate.dictating ? 'Recording' : 'Not recording'}
+        role="status"
       >
-        {dictate.preparingModel ? '…' : '🎤'}
-      </button>
+        {#if dictate.preparingModel}
+          <span class="compose__mic-icon">…</span>
+        {:else if dictate.dictating}
+          <span class="compose__mic-bars" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </span>
+        {:else}
+          <span class="compose__mic-icon">🎤</span>
+        {/if}
+      </div>
       <button
         type="button"
         class="compose__iconbtn"
@@ -468,12 +512,56 @@
     border-color: color-mix(in srgb, var(--accent-snippet) 55%, var(--border));
     outline: none;
   }
-  /* The mic while dictating — a steady highlight, not an animation, so it
-     reads as a state rather than a distraction. */
-  .compose__iconbtn--active {
+  /* The mic status indicator — same footprint as the icon buttons next to it,
+     but not interactive (no hover/focus states, no cursor: pointer): it only
+     ever reports what Space is doing. */
+  .compose__mic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.8rem;
+    height: 1.8rem;
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1;
+    opacity: 0.55;
+  }
+  .compose__mic--active {
     opacity: 1;
     color: var(--accent-result-err);
     border-color: color-mix(in srgb, var(--accent-result-err) 55%, var(--border));
+  }
+  .compose__mic-icon {
+    display: block;
+  }
+  /* Four bars bouncing out of phase — a plain stand-in for a waveform, just
+     enough motion to read as "actively listening" without a real analyser. */
+  .compose__mic-bars {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    height: 0.9rem;
+  }
+  .compose__mic-bars span {
+    width: 0.15rem;
+    height: 100%;
+    border-radius: 0.1rem;
+    background: currentColor;
+    animation: compose-mic-bar 0.9s ease-in-out infinite;
+    transform-origin: center;
+  }
+  .compose__mic-bars span:nth-child(1) { animation-delay: 0s; }
+  .compose__mic-bars span:nth-child(2) { animation-delay: 0.15s; }
+  .compose__mic-bars span:nth-child(3) { animation-delay: 0.3s; }
+  .compose__mic-bars span:nth-child(4) { animation-delay: 0.45s; }
+
+  @keyframes compose-mic-bar {
+    0%, 100% { transform: scaleY(0.3); }
+    50% { transform: scaleY(1); }
   }
 
   /* The in-progress utterance — dimmed, outside the contenteditable, never

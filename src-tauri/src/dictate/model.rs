@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use bzip2::read::BzDecoder;
 
-use crate::net::{download_verified, write_atomic};
+use crate::net::{download_verified_with_progress, write_atomic};
 
 /// Pinned release tag: `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`.
 /// Contains `model.int8.onnx` (~226MB) and `tokens.txt` (~308KB) — a few
@@ -66,14 +66,28 @@ fn extract_member(archive: &[u8], member: &str) -> Result<Vec<u8>, String> {
 
 /// Download + verify + extract the model and tokens file, skipping the work
 /// entirely if both are already on disk — so a retry after a failed or
-/// interrupted first attempt doesn't re-fetch 158MB for nothing. Blocking;
-/// the caller runs it on a background thread while the frontend shows a
-/// "preparing…" state.
-pub fn download_artifacts(root: &Path) -> Result<(), String> {
+/// interrupted first attempt doesn't re-fetch 158MB for nothing. Blocking.
+///
+/// This is now a Settings-only, explicitly user-triggered action (never an
+/// implicit side effect of trying to dictate — see `dictate::state`), so
+/// `on_progress(fraction)` reports 0.0–1.0 for a progress bar; when the
+/// server didn't send a `Content-Length` it is called once at the end with
+/// `1.0` rather than left silent throughout.
+pub fn download_artifacts(root: &Path, mut on_progress: impl FnMut(f32)) -> Result<(), String> {
     if artifacts_present(root) {
+        on_progress(1.0);
         return Ok(());
     }
-    let archive = download_verified(ARCHIVE_URL, ARCHIVE_SHA256, "sherpa-onnx-sense-voice-small.tar.bz2")?;
+    let archive = download_verified_with_progress(
+        ARCHIVE_URL,
+        ARCHIVE_SHA256,
+        "sherpa-onnx-sense-voice-small.tar.bz2",
+        |downloaded, total| {
+            if let Some(total) = total.filter(|t| *t > 0) {
+                on_progress(downloaded as f32 / total as f32);
+            }
+        },
+    )?;
 
     let model_member = format!("{ARCHIVE_PREFIX}/{MODEL_FILE}");
     let tokens_member = format!("{ARCHIVE_PREFIX}/{TOKENS_FILE}");
@@ -82,6 +96,7 @@ pub fn download_artifacts(root: &Path) -> Result<(), String> {
 
     write_atomic(&model_path(root), &model_bytes)?;
     write_atomic(&tokens_path(root), &tokens_bytes)?;
+    on_progress(1.0);
     Ok(())
 }
 
@@ -134,7 +149,7 @@ mod tests {
     fn full_download_path_fetches_verifies_and_extracts() {
         let root = std::env::temp_dir()
             .join(format!("prompt-compose-dictate-model-e2e-{}", uuid::Uuid::new_v4()));
-        download_artifacts(&root).expect("download + verify + extract");
+        download_artifacts(&root, |_| {}).expect("download + verify + extract");
         assert!(artifacts_present(&root));
         assert!(std::fs::metadata(model_path(&root)).unwrap().len() > 100_000_000);
         assert!(std::fs::metadata(tokens_path(&root)).unwrap().len() > 100_000);
