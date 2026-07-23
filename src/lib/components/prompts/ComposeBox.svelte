@@ -19,6 +19,8 @@
   import { onMount, tick, untrack } from 'svelte';
   import { prompts, composeSetDoc, composeSetCaret, clearPendingCaret } from '$lib/prompts.svelte';
   import { type Caret, type RawNode } from '$lib/compose/doc';
+  import { dictate, toggleDictation } from '$lib/dictate.svelte';
+  import DictatePopover from './DictatePopover.svelte';
 
   interface Props {
     /** Copy Prompt — the parent owns the clipboard call + toast. */
@@ -35,6 +37,7 @@
   let { onCopy, onClear, onStepIntoPanel }: Props = $props();
 
   let boxEl: HTMLDivElement | undefined = $state(undefined);
+  let dictatePopoverOpen = $state(false);
 
   const hasContent = $derived(prompts.doc.nodes.length > 0);
 
@@ -312,11 +315,12 @@
       onpaste={handlePaste}
     ></div>
 
-    {#if hasContent}
-      <!-- Top-right icons, semi-transparent — the affordance every code block on
-           the web already has. Present only when the box has content, so a no-op
-           Clear (or Copy) is never offered. -->
-      <div class="compose__actions">
+    <!-- Top-right icons, semi-transparent — the affordance every code block on
+         the web already has. Clear/Copy present only when the box has content,
+         so a no-op is never offered; the mic is always available since you may
+         well be dictating into an empty box. -->
+    <div class="compose__actions">
+      {#if hasContent}
         <button
           type="button"
           class="compose__iconbtn"
@@ -335,7 +339,40 @@
         >
           ⧉
         </button>
-      </div>
+      {/if}
+      <button
+        type="button"
+        class="compose__iconbtn"
+        class:compose__iconbtn--active={dictate.dictating}
+        onclick={() => toggleDictation()}
+        title={dictate.dictating ? 'Stop dictation' : 'Start dictation'}
+        aria-label={dictate.dictating ? 'Stop dictation' : 'Start dictation'}
+        aria-pressed={dictate.dictating}
+      >
+        {dictate.preparingModel ? '…' : '🎤'}
+      </button>
+      <button
+        type="button"
+        class="compose__iconbtn"
+        onclick={() => (dictatePopoverOpen = !dictatePopoverOpen)}
+        title="Dictation settings"
+        aria-label="Dictation settings"
+      >
+        ⋯
+      </button>
+      {#if dictatePopoverOpen}
+        <DictatePopover onClose={() => (dictatePopoverOpen = false)} />
+      {/if}
+    </div>
+
+    {#if dictate.interimText}
+      <!-- Interim text lives OUTSIDE the contenteditable on purpose: the box's
+           render effect only ever repaints on an external insert, specifically
+           to avoid yanking the user's caret — a live-updating span painted into
+           the box on every ~1s partial would fight that invariant. Only a
+           finalized utterance ever touches the box, via the same safe
+           pendingCaret insert path a snippet uses. -->
+      <div class="compose__interim" aria-live="polite">{dictate.interimText}</div>
     {/if}
   </div>
 </div>
@@ -430,5 +467,28 @@
     color: var(--text);
     border-color: color-mix(in srgb, var(--accent-snippet) 55%, var(--border));
     outline: none;
+  }
+  /* The mic while dictating — a steady highlight, not an animation, so it
+     reads as a state rather than a distraction. */
+  .compose__iconbtn--active {
+    opacity: 1;
+    color: var(--accent-result-err);
+    border-color: color-mix(in srgb, var(--accent-result-err) 55%, var(--border));
+  }
+
+  /* The in-progress utterance — dimmed, outside the contenteditable, never
+     touching the document (see the template comment above). */
+  .compose__interim {
+    position: absolute;
+    bottom: 0.6rem;
+    left: 0.9rem;
+    right: 0.9rem;
+    font-size: 0.78rem;
+    color: var(--text-faint);
+    font-style: italic;
+    pointer-events: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

@@ -26,6 +26,7 @@ import {
   emptyDoc,
   fromRawNodes,
   insertSnippet,
+  insertText,
   flatten,
   caretQuery,
 } from './compose/doc';
@@ -324,6 +325,19 @@ export function composeInsertSnippet(content: string): void {
   prompts.pendingCaret = caret;
   prompts.matchQuery = ''; // the query line was consumed by the insert
   scheduleMatch(); // clears the now-stale suggestions
+  prompts.renderNonce++;
+}
+
+/**
+ * Insert dictated text at the caret — the sibling of `composeInsertSnippet`
+ * for the mic button. No tint (dictated text carries no template provenance)
+ * and no query line to consume: the caret sits at an ordinary typing
+ * position, so unlike a snippet insert `matchQuery` is left as-is.
+ */
+export function composeInsertText(content: string): void {
+  const { doc, caret } = insertText(prompts.doc, prompts.caret ?? { node: 0, offset: 0 }, content);
+  prompts.doc = doc;
+  prompts.pendingCaret = caret;
   prompts.renderNonce++;
 }
 

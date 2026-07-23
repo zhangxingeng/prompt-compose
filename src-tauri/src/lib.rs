@@ -1,11 +1,13 @@
 //! Prompt Compose — the native shell.
 //!
-//! Rust owns the filesystem (the Markdown snippet store, the app-local roster)
-//! and the semantic-match machinery; the SvelteKit frontend owns rendering and
-//! the variable grammar. The only command surface is the Prompt Library's — see
-//! `prompts::state`.
+//! Rust owns the filesystem (the Markdown snippet store, the app-local roster),
+//! the semantic-match machinery, and local speech-to-text; the SvelteKit
+//! frontend owns rendering and the variable grammar. Two command surfaces:
+//! the Prompt Library's (`prompts::state`) and dictation's (`dictate::state`).
 
 mod datadir;
+mod dictate;
+mod net;
 mod prompts;
 
 use tauri::Manager;
@@ -21,6 +23,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(prompts::state::PromptsState::new())
+        .manage(dictate::state::DictateState::new())
         .invoke_handler(tauri::generate_handler![
             prompts::state::list_projects,
             prompts::state::add_project,
@@ -32,6 +35,9 @@ pub fn run() {
             prompts::state::delete_snippet,
             prompts::state::match_snippets,
             prompts::state::touch_snippet,
+            dictate::state::list_audio_devices,
+            dictate::state::start_dictation,
+            dictate::state::stop_dictation,
         ])
         .setup(move |app| {
             // Prompt Library: fetch the embedding model and index the active

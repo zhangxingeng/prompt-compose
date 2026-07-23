@@ -164,6 +164,44 @@ export function insertSnippet(
   return { doc: result, caret: caretAtGlobalOffset(result, prefixLen + text.length) };
 }
 
+/**
+ * Insert plain text at the caret — a sibling of `insertSnippet` for dictated
+ * text. Two differences from a snippet insert: the new run is untinted
+ * (dictated text carries no template provenance), and there is no query line
+ * to consume — the caret sits at an ordinary typing position, not at the end
+ * of a search query, so both sides of it are kept intact and the text simply
+ * lands between them.
+ *
+ * Returns the new doc AND the caret position just past the inserted text, so
+ * the next utterance continues where this one left off.
+ */
+export function insertText(doc: Doc, caret: Caret, text: string): { doc: Doc; caret: Caret } {
+  const at = Math.max(0, Math.min(caret.node, doc.nodes.length));
+  const node = doc.nodes[at];
+  const textNode: TextNode = { kind: 'text', text };
+
+  // The caret is past the end of the model: just append.
+  if (!node) {
+    const result = normalize({ nodes: [...doc.nodes, textNode] });
+    return { doc: result, caret: caretAtGlobalOffset(result, flatten(result).length) };
+  }
+
+  const offset = Math.max(0, Math.min(caret.offset, node.text.length));
+
+  const result = normalize({
+    nodes: [
+      ...doc.nodes.slice(0, at),
+      { kind: node.kind, text: node.text.slice(0, offset) },
+      textNode,
+      { kind: node.kind, text: node.text.slice(offset) },
+      ...doc.nodes.slice(at + 1),
+    ],
+  });
+
+  const prefixLen = flatten({ nodes: doc.nodes.slice(0, at) }).length + offset;
+  return { doc: result, caret: caretAtGlobalOffset(result, prefixLen + text.length) };
+}
+
 // ── the contenteditable seam ─────────────────────────────────────────────────
 // The box renders these nodes and reads them back. Keeping both directions as
 // pure functions over plain data — rather than letting the component walk the DOM

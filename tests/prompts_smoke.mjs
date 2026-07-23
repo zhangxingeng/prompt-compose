@@ -25,6 +25,7 @@ const {
   flatten,
   caretAtGlobalOffset,
   insertSnippet,
+  insertText,
   fromRawNodes,
   caretQuery,
 } = await import(join(root, 'src/lib/compose/doc.ts'));
@@ -262,6 +263,41 @@ console.log('node model');
   const snap = JSON.stringify(before);
   insertSnippet(before, { node: 0, offset: 1 }, 'X');
   eq(JSON.stringify(before), snap, 'insertSnippet does not mutate its input');
+}
+
+// ── insertText (dictation) ───────────────────────────────────────────────────
+// The plain-text sibling of insertSnippet: no tint, and — unlike a snippet
+// insert — no query line is consumed, since a dictation caret sits at an
+// ordinary typing position, not at the end of a search query.
+console.log('insertText');
+{
+  const q = insertText(docFromText('intro\nsenior review'), { node: 0, offset: 'intro\nsenior review'.length }, ' spoken');
+  eq(kinds(q.doc), ['text'], 'the inserted run is untinted, and merges with adjacent free text');
+  eq(flatten(q.doc), 'intro\nsenior review spoken', 'the line before the caret is kept, not consumed');
+  eq(q.caret, { node: 0, offset: 'intro\nsenior review spoken'.length }, 'caret lands just past the inserted text');
+
+  // Inserting mid-line keeps both the prefix and the suffix intact.
+  const mid = insertText(docFromText('before AFTER'), { node: 0, offset: 'before '.length }, 'X ');
+  eq(flatten(mid.doc), 'before X AFTER', 'both sides of the caret survive — nothing is eaten');
+
+  // Inserting inside a tinted run keeps both halves tinted (same rule
+  // insertSnippet follows), but the new middle run itself carries no tint.
+  const inTint = insertText(normalize({ nodes: [tint('keepMEtint')] }), { node: 0, offset: 'keep'.length }, 'X');
+  eq(kinds(inTint.doc), ['tint', 'text', 'tint'], 'splitting a tint leaves both halves tinted; the insert itself is not');
+  eq(flatten(inTint.doc), 'keepXMEtint', 'text preserved on both sides of the insert');
+
+  // Insert into an empty doc, and past the end.
+  const e = insertText(emptyDoc(), { node: 0, offset: 0 }, 'S');
+  eq(kinds(e.doc), ['text'], 'insert into an empty doc lands untinted');
+  eq(flatten(e.doc), 'S', 'body inserted');
+  const past = insertText(docFromText('tail'), { node: 9, offset: 0 }, '!');
+  eq([kinds(past.doc), flatten(past.doc)], [['text'], 'tail!'], 'a caret past the end appends untinted, and merges');
+
+  // Pure transform: the input is never mutated.
+  const before = normalize({ nodes: [text('a'), tint('b')] });
+  const snap = JSON.stringify(before);
+  insertText(before, { node: 0, offset: 1 }, 'X');
+  eq(JSON.stringify(before), snap, 'insertText does not mutate its input');
 }
 
 // ── the contenteditable round-trip ───────────────────────────────────────────

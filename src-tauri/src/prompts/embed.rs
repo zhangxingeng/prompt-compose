@@ -43,9 +43,9 @@ use fastembed::{
     UserDefinedEmbeddingModel,
 };
 use rusqlite::Connection;
-use sha2::{Digest, Sha256};
 
 use super::store::Snippet;
+use crate::net::{download_verified, sha256_hex, write_atomic};
 
 /// The pinned embedding model: the fastembed-blessed quantized
 /// BGE-small-en-v1.5 (Cls pooling, static quantization, 384 dims) — the
@@ -132,32 +132,6 @@ pub fn artifacts_present(root: &Path) -> bool {
     lib.is_file() && MODEL_FILES.iter().all(|(name, _)| model_files_dir(root).join(name).is_file())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
-}
-
-/// Download `url` in full, then verify the hardcoded checksum. A mismatch
-/// discards the bytes and errors — the caller never sees unverified content,
-/// which is the invariant the whole security posture rests on.
-fn download_verified(url: &str, expected_sha256: &str, file: &str) -> Result<Vec<u8>, String> {
-    let response = ureq::get(url).call().map_err(|e| format!("download of {file} failed: {e}"))?;
-    let mut bytes: Vec<u8> = Vec::new();
-    response
-        .into_body()
-        .into_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("download of {file} interrupted: {e}"))?;
-    let actual = sha256_hex(&bytes);
-    if actual != expected_sha256 {
-        return Err(format!(
-            "checksum mismatch for {file} (expected {expected_sha256}, got {actual}); discarded"
-        ));
-    }
-    Ok(bytes)
-}
-
 /// Extract exactly one member from a verified `.tgz` archive.
 fn extract_from_tgz(archive: &[u8], member: &str) -> Result<Vec<u8>, String> {
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
@@ -189,17 +163,6 @@ fn extract_lib(artifact: &OrtArtifact, archive: &[u8]) -> Result<Vec<u8>, String
         return extract_from_zip(archive, artifact.lib_in_archive);
     }
     extract_from_tgz(archive, artifact.lib_in_archive)
-}
-
-/// Atomic write: temp sibling + rename, so a crash mid-write can never leave
-/// a plausible-but-truncated native library or model on disk.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("part");
-    fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// Fetch + verify + install the runtime lib and every model file, skipping the
@@ -479,15 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn sha256_matches_known_vector() {
-        // "abc" — FIPS 180-2 test vector; guards the verify path itself.
-        assert_eq!(
-            sha256_hex(b"abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-    }
-
-    #[test]
     fn vector_blob_round_trip_is_exact() {
         let v = vec![0.0f32, -1.5, 3.25e10, f32::MIN_POSITIVE, -0.0];
         assert_eq!(blob_to_vector(&vector_to_blob(&v)), v);
@@ -500,19 +454,6 @@ mod tests {
         assert!((cosine(&[1.0, 0.0], &[-1.0, 0.0]) + 1.0).abs() < 1e-6);
         assert_eq!(cosine(&[1.0], &[1.0, 2.0]), 0.0, "length mismatch is 0, not a panic");
         assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), 0.0, "zero vector is 0, not NaN");
-    }
-
-    #[test]
-    fn checksum_mismatch_message_is_actionable() {
-        // The verify failure path must name the file and both hashes — this is
-        // the error a user reports when a CDN mangles a download.
-        let err = download_verified(
-            "data:text/plain,x", // ureq rejects non-http schemes → download error path
-            "00",
-            "f",
-        )
-        .unwrap_err();
-        assert!(err.contains('f'));
     }
 
     /// The whole semantic path against the real pinned URLs: download, verify,

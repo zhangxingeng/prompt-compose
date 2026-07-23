@@ -122,6 +122,61 @@ export async function touchSnippet(project: string, name: string): Promise<void>
   await call<null>('touch_snippet', { project, name });
 }
 
+// ---------------------------------------------------------------------------
+// Dictation — local speech-to-text (src-tauri/src/dictate/). Device, language
+// and model are the only controls; interim/final text arrives over the
+// `dictate:partial` / `dictate:final` events, not a return value.
+// ---------------------------------------------------------------------------
+
+/** One selectable input device. `id` is opaque — round-trip it back into
+ *  `startDictation`, never parse it. */
+export interface AudioDevice {
+  id: string;
+  name: string;
+}
+
+/** Every input device on the system. There is no mic in headless `pnpm dev`,
+ *  so the browser-dev fallback is just an empty list rather than a fixture —
+ *  the picker renders "no devices found" instead of pretending to record. */
+export async function listAudioDevices(): Promise<AudioDevice[]> {
+  if (!isTauri()) return [];
+  return call<AudioDevice[]>('list_audio_devices');
+}
+
+/** Start one capture+decode session. `deviceId` of `null` uses the system
+ *  default input. `language` is `"auto" | "en" | "zh"`. Resolves once setup
+ *  (model download on first use, engine load, opening the device) succeeds;
+ *  a rejection is a real failure to show the user, not a routine "no result". */
+export async function startDictation(deviceId: string | null, language: string): Promise<void> {
+  if (!isTauri()) {
+    throw new Error('Dictation needs the desktop app — there is no microphone in browser-dev.');
+  }
+  await call<null>('start_dictation', { deviceId, language });
+}
+
+/** Stop the running session. It flushes whatever was captured since the last
+ *  commit as one final `dictate:final` before the mic actually closes. */
+export async function stopDictation(): Promise<void> {
+  if (!isTauri()) return;
+  await call<null>('stop_dictation');
+}
+
+/** Interim text for the utterance still being spoken — never touches the
+ *  compose doc, just the dimmed strip near the mic button. Superseded by the
+ *  next partial or by `dictate:final`, whichever comes first. */
+export async function onDictatePartial(cb: (text: string) => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<{ text: string }>('dictate:partial', (e) => cb(e.payload.text));
+}
+
+/** One committed utterance — lands at the compose box's cursor. */
+export async function onDictateFinal(cb: (text: string) => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<{ text: string }>('dictate:final', (e) => cb(e.payload.text));
+}
+
 // --- Browser-dev prompt store ------------------------------------------------
 // Real folder/file semantics over seeded samples, so `pnpm dev` exercises the
 // whole view with no native shell — this is how the app is feel-checked and how

@@ -51,6 +51,16 @@ sha2 = "0.10"
 # just the shared library.
 flate2 = "1"
 tar = "0.4"
+# Dictation: SenseVoice-Small ASR via sherpa-onnx (k2-fsa), cpal for
+# microphone capture. Unlike the fastembed/ort dynamic-load setup above,
+# sherpa-onnx's build.rs resolves (and by default downloads) its own native
+# library at `cargo build` time — there is no runtime-dlopen path for it, so
+# no separate feature flag is needed here.
+sherpa-onnx = "1"
+cpal = "0.18"
+# The SenseVoice release asset is a .tar.bz2 (unlike the ONNX Runtime's
+# .tgz above), so it needs its own decompressor.
+bzip2 = "0.6"
 
 # Windows ships onnxruntime as a .zip instead of a .tgz.
 [target.'cfg(windows)'.dependencies]
