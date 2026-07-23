@@ -3268,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "prompt-compose"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bzip2 0.6.1",
  "cpal",
